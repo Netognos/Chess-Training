@@ -88,19 +88,24 @@ async function evaluate(engine, g, color, opts, onPos) {
       if (drop >= 10) { need.add(i); need.add(i + 1); }
     }
   } else for (let i = 0; i < n; i++) need.add(i);
-  let k = 0;
+  let k = 0; const depths = [];
   for (const i of need) {
     const t = terminal(g.fens[i]);
     if (t) evals[i] = t;
     else {
-      const [line] = await engine.analyse(g.fens[i], { movetime: opts.movetime });
+      // Spend less time where it hardly matters: the first moves of the game (theory) and
+      // positions that are already decided (|eval| > 7). Errors there barely change the win chance.
+      const prev = i > 0 ? evals[i - 1] : null;
+      const cheap = (!havePgn && i < 8) || (prev && Math.abs(prev.cp) >= 700);
+      const [line] = await engine.analyse(g.fens[i], { movetime: cheap ? Math.max(25, Math.round(opts.movetime * 0.3)) : opts.movetime });
       const stm = g.fens[i].split(" ")[1];
       const cp = lineToCp(line);
       evals[i] = { cp: stm === "w" ? cp : -cp, pv: line ? line.pv : [] };
+      if (line && !cheap) depths.push(line.depth);
     }
     onPos && onPos(++k, need.size);
   }
-  return { evals, usedPgnEvals: havePgn };
+  return { evals, usedPgnEvals: havePgn, depth: depths.length ? Math.round(depths.reduce((a, b) => a + b, 0) / depths.length) : null };
 }
 
 export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
@@ -111,7 +116,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   if (!color) return { skipped: "player not in game" };
   if (H.Variant && !/^(standard|chess)$/i.test(H.Variant)) return { skipped: "variant" };
   if (g.moves.length < 10) return { skipped: "too short" };
-  const { evals, usedPgnEvals } = await evaluate(engine, g, color, { movetime: opts.movetime || 150 }, onPos);
+  const { evals, usedPgnEvals, depth } = await evaluate(engine, g, color, { movetime: opts.movetime || 150 }, onPos);
 
   const [base] = parseTc(H.TimeControl);
   const sign = color === "w" ? 1 : -1;
@@ -194,7 +199,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     site: H.Site || "", date: H.UTCDate || H.Date || "", white: H.White, black: H.Black, color, result: res, score,
     playerElo: color === "w" ? H.WhiteElo : H.BlackElo, opponentElo: color === "w" ? H.BlackElo : H.WhiteElo,
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl), termination: H.Termination || "", opening, eco: H.ECO || "",
-    plies: g.moves.length, accuracy: avg(all), usedPgnEvals,
+    plies: g.moves.length, accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),
@@ -205,7 +210,8 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
 
 export function aggregate(games) {
   const pct = (xs) => (xs.length ? +(100 * xs.reduce((a, b) => a + (b ?? 0), 0) / xs.length).toFixed(1) : null);
-  const A = { games: games.length, scorePct: pct(games.map((g) => g.score)) };
+  const A = { games: games.length, scorePct: pct(games.map((g) => g.score)), wins: games.filter((g) => g.score === 1).length, draws: games.filter((g) => g.score === 0.5).length, losses: games.filter((g) => g.score === 0).length };
+  const dg = games.filter((g) => g.depth); A.depth = dg.length ? Math.round(dg.reduce((a, g) => a + g.depth, 0) / dg.length) : null; A.serverAnalysed = games.filter((g) => g.usedPgnEvals).length;
   A.byColor = {}; for (const c of ["w", "b"]) { const v = games.filter((g) => g.color === c); if (v.length) A.byColor[c] = { games: v.length, scorePct: pct(v.map((g) => g.score)) }; }
   A.tc = {}; for (const g of games) A.tc[g.tc] = (A.tc[g.tc] || 0) + 1;
   const tot = {}, cnt = {};

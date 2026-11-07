@@ -141,7 +141,7 @@ function games(v) {
       <label class="f">Period<select id="months"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></label>
       <label class="f">Time control at least<select id="mintc"><option value="300">5+0</option><option value="600" selected>10+0</option><option value="1300">15+10</option><option value="1800">30+0</option></select></label>
       <label class="f">Max. number of games<input id="num" type="number" value="100" min="1" max="500"></label>
-      <label class="f">Depth<select id="speed"><option value="80">Fast (≈7 s/game)</option><option value="150" selected>Normal (≈12 s/game)</option><option value="400">Deep (≈30 s/game)</option></select></label>
+      <label class="f">Analysis depth<select id="speed"><option value="80">Fast (≈ depth 12-14)</option><option value="150" selected>Normal (≈ depth 14-16)</option><option value="400">Deep (≈ depth 17-19)</option></select></label>
     </div>
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
@@ -150,10 +150,10 @@ function games(v) {
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
     <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
     <p class="small muted">"Time control at least 10+0" counts a game as base time + 40 × increment, so 8+2 also qualifies. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster.</p></div>
-    <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Opening</th></tr>
+    <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Depth</th><th>Opening</th></tr>
     ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
       const e = (l) => g.errors.filter((x) => x.label === l).length;
-      return `<tr><td>${esc(g.date)}</td><td>${g.site && g.site.startsWith("http") ? `<a href="${esc(g.site)}" target="_blank" rel="noopener">${esc(opp)}</a>` : esc(opp)} <span class="muted small">${esc(g.opponentElo || "")}</span></td><td>${g.color === "w" ? "White" : "Black"}</td><td>${res}</td><td>${g.accuracy ?? "–"}</td><td><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></td><td class="small">${esc(g.opening)}</td></tr>`; }).join("")}</table></div>
+      return `<tr><td>${esc(g.date)}</td><td>${g.site && g.site.startsWith("http") ? `<a href="${esc(g.site)}" target="_blank" rel="noopener">${esc(opp)}</a>` : esc(opp)} <span class="muted small">${esc(g.opponentElo || "")}</span></td><td>${g.color === "w" ? "White" : "Black"}</td><td>${res}</td><td>${g.accuracy ?? "–"}</td><td><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></td><td class="small">${g.usedPgnEvals ? "Lichess" : g.depth ?? "–"}</td><td class="small">${esc(g.opening)}</td></tr>`; }).join("")}</table></div>
     <div class="row" style="margin-top:10px"><button class="btn secondary" id="clearG">Delete all games</button></div>` : `<p class="muted">No games yet.</p>`}</div>`;
   const srcP = $("#srcP");
   srcP.onchange = () => $("#pgnBox").classList.toggle("hidden", !srcP.checked);
@@ -253,13 +253,22 @@ async function runImport(v) {
     if (!items.length) { $("#progText").textContent = `${list.length} games found, all already analysed.`; return; }
     const q = { player: p.id, items, total: items.length, done: 0, added: 0, skipped: 0, movetime, src, started: new Date().toISOString() };
     if (!saveQueue(q)) toast("Couldn't save the queue (storage full): this analysis can't resume if the app gets closed.");
-    $("#progText").textContent = `${list.length} games found, ${items.length} to analyse. Estimated time: ~${Math.max(1, Math.round(items.length * movetime / 150 * 12 / 60))} min.`;
+    $("#progText").textContent = `${list.length} games found, ${items.length} to analyse with ${engineCount()} engines in parallel. Estimated time: ~${Math.max(1, Math.round(items.length * movetime / 150 * 9 / 60 / engineCount()))} min.`;
     processQueue(q);
   } catch (e) {
     console.error(e);
     $("#progText").innerHTML = `<span style="color:var(--bad)">${esc(e.message || e)}</span> · If downloading doesn't work, export the PGN from the website and paste it under 'PGN'.`;
   } finally { const g = $("#go"); if (g) g.disabled = false; }
 }
+
+// Several Stockfish workers in parallel (one game each): ~N× faster on multi-core devices.
+const pool = [];
+function engineCount() {
+  const cores = navigator.hardwareConcurrency || 2;
+  const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return Math.max(1, Math.min(mobile ? 3 : 6, cores - 1));
+}
+function enginePool(n) { while (pool.length < n) pool.push(Engine.browser()); return pool.slice(0, n); }
 
 async function processQueue(q) {
   if (running) return;
@@ -268,25 +277,41 @@ async function processQueue(q) {
   running = { stop: false };
   $("#jobStop").classList.remove("hidden");
   await keepAwake(true);
-  jobUI(`Starting Stockfish… (${q.total - q.done} games to go)`);
-  try {
-    const eng = getEngine(); await eng.ready;
-    while (q.items.length && !running.stop) {
-      const it = q.items[0];
+  const n = Math.min(engineCount(), q.items.length);
+  jobUI(`Starting ${n} Stockfish engine${n > 1 ? "s" : ""}… (${q.items.length} games to go)`);
+  const engines = enginePool(n);
+  const t0 = Date.now(), doneAtStart = q.done;
+  const progress = {}; const depths = [];
+  const show = () => {
+    const partial = Object.values(progress).reduce((a, x) => a + x, 0);
+    const doneNow = q.done - doneAtStart, el = (Date.now() - t0) / 1000;
+    const eta = doneNow ? Math.round(el / doneNow * q.items.length / 60) : null;
+    const dep = depths.length ? Math.round(depths.reduce((a, b) => a + b, 0) / depths.length) : null;
+    jobUI(`Analysing ${p.name}: ${q.done} of ${q.total} games done · ${n} engine${n > 1 ? "s" : ""}${dep ? ` · depth ≈${dep}` : ""}${eta !== null ? ` · ~${eta} min left` : ""}${wakeLock ? " · screen stays on" : ""}`, 100 * (q.done + partial) / q.total);
+  };
+  const inflight = new Set();
+  const worker = async (eng, wi) => {
+    await eng.ready;
+    while (!running.stop) {
+      const it = q.items.find((x) => !inflight.has(x)); if (!it) break;
+      inflight.add(it);
       let r;
-      try {
-        r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime }, (k, n) =>
-          jobUI(`Analysing ${p.name}: game ${q.done + 1} of ${q.total} (${it.src}) · position ${k}/${n}${wakeLock ? " · screen stays on" : ""}`, 100 * (q.done + k / n) / q.total));
-      } catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
+      try { r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime }, (k, m) => { progress[wi] = k / m; show(); }); }
+      catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
+      progress[wi] = 0;
       if (running.stop) break;
-      q.items.shift(); q.done++;
+      q.items.splice(q.items.indexOf(it), 1); inflight.delete(it); q.done++;
       if (r.skipped) q.skipped++;
-      else { const link = (/\[Link "([^"]+)"/.exec(it.pgn) || [])[1]; if (link) { r.site = link; r.id = link; } p.games[r.id] = r; q.added++; save(); }
-      saveQueue(q);
+      else { const link = (/\[Link "([^"]+)"/.exec(it.pgn) || [])[1]; if (link) { r.site = link; r.id = link; } p.games[r.id] = r; q.added++; if (r.depth) depths.push(r.depth); save(); }
+      saveQueue(q); show();
     }
-    if (running.stop) { jobDone(`Paused: ${q.items.length} games left. Continue later via Games.`); return; }
+  };
+  try {
+    await Promise.all(engines.map((e, i) => worker(e, i)));
+    if (running.stop) { saveQueue(q); jobDone(`Paused: ${q.items.length} games left. Continue later via Games.`); return; }
     saveQueue(null);
-    jobDone(`Done: ${q.added} games analysed${q.skipped ? `, ${q.skipped} skipped (too short or the name didn't match)` : ""}.`);
+    const mins = Math.max(1, Math.round((Date.now() - t0) / 60000));
+    jobDone(`Done: ${q.added} games analysed in ~${mins} min${q.skipped ? `, ${q.skipped} skipped (too short or the name didn't match)` : ""}.`);
     if (q.added) { buildReport(p); logEvent("analysis", `${q.added} games analysed (${q.src}). Total ${Object.keys(p.games).length}.`); toast("Analysis done. See Report."); if (S.current === p.id && tab === "games") setTimeout(() => go("report"), 900); }
   } finally { running = null; keepAwake(false); }
 }
@@ -323,11 +348,19 @@ function report(v) {
   const hist = p.reports.slice(0, 6);
   v.innerHTML = `
   <div class="card"><h2>Overview: ${A.games} games</h2><div class="stats">
-    <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score</div></div>
+    <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score: ${A.wins} won · ${A.draws} drawn · ${A.losses} lost</div></div>
     ${ph.map((x) => `<div class="stat"><div class="v">${A.phaseAcc[x]}</div><div class="l">${x} accuracy · ${A.seriousPer100[x]} errors/100 moves</div></div>`).join("")}
     <div class="stat"><div class="v">${A.conversion.chances ? Math.round(100 * A.conversion.won / A.conversion.chances) + "%" : "–"}</div><div class="l">won positions converted (${A.conversion.won}/${A.conversion.chances})</div></div>
     <div class="stat"><div class="v">${A.resilience.lost ? A.resilience.saved + "/" + A.resilience.lost : "–"}</div><div class="l">lost positions saved</div></div>
-  </div><p class="muted small">Errors/100 = mistakes + blunders per 100 of your moves in that phase. Blunder = win chance drops ≥ 15%, mistake ≥ 10% (Lichess thresholds).</p></div>
+  </div>
+  <details class="small" style="margin-top:8px"><summary><b>What do these numbers mean?</b></summary>
+  <ul>
+    <li><b>Score</b> = your points as a percentage: a win is 1 point, a draw ½, a loss 0, divided by the number of games. So it's not a win/loss ratio: draws count for half. 50% means you score as much as your opponents, which is normal when the matchmaking puts you against equally rated players.</li>
+    <li><b>Accuracy</b> (0-100) = how close your moves are to Stockfish's best move, with the same formula as Lichess. Accuracy follows the win chance, so small inaccuracies in a balanced position cost more than in a position that's already won. Over a whole game, 90+ is very good, and 80-90 is normal for club level in rapid.</li>
+    <li><b>Errors/100 moves</b> = mistakes + blunders per 100 of your own moves in that phase. A <b>blunder</b> costs at least 15% win chance, a <b>mistake</b> at least 10%, an <b>inaccuracy</b> at least 5% (Lichess thresholds).</li>
+    <li><b>Converted / saved</b>: games where your win chance went above 85% (or below 15%), and how they ended.</li>
+    <li><b>Analysis depth</b>: ${A.depth ? `Stockfish 19 (lite) looked on average <b>${A.depth} half-moves</b> deep per position` : "unknown for older games"}${A.serverAnalysed ? `; ${A.serverAnalysed} games reused the Lichess server analysis` : ""}. Depth 14-16 reliably finds mistakes and blunders at club level, and depth 18+ is roughly what Lichess uses for a quick server analysis.</li>
+  </ul></details></div>
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
      ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}</div>

@@ -88,34 +88,105 @@ async function pickItem(cur, slot) {
   return cands[Math.floor(Math.random() * cands.length)];
 }
 
+// ---- reading a written line ("Txf7 Kxf7 Dh5+" / "1.Rxf7 Kxf7 2.Qh5+" / UCI), Dutch or English piece letters
+export function parseLine(fen, text) {
+  const c = new Chess(fen); const moves = [];
+  const toks = (text || "").replace(/…/g, "...").replace(/[,;]/g, " ").split(/\s+/).map((t) => t.replace(/^\d+\.(\.\.)?/, "").replace(/[!?]+$/, "")).filter((t) => t && !/^\d+\.*$/.test(t));
+  for (const [i, raw] of toks.entries()) {
+    let t = raw.replace(/^0-0-0/, "O-O-O").replace(/^0-0/, "O-O").replace(/^([DTLP])/, (m) => ({ D: "Q", T: "R", L: "B", P: "N" }[m])).replace(/=([DTLP])/, (m, x) => "=" + { D: "Q", T: "R", L: "B", P: "N" }[x]);
+    let mv = null;
+    try { mv = c.move(t, { strict: false }); } catch { mv = null; }
+    if (!mv && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(raw)) { try { mv = c.move({ from: raw.slice(0, 2), to: raw.slice(2, 4), promotion: raw[4] }); } catch { mv = null; } }
+    if (!mv) return { moves, error: { index: i, token: raw } };
+    moves.push({ san: mv.san, uci: mv.from + mv.to + (mv.promotion || "") });
+  }
+  return { moves, error: null };
+}
+
+// Check a written line against the solution and, where it deviates, with the engine.
+// Returns how many of YOUR moves are sound (consecutively from the start), plus notes.
+async function gradeLine(C, fen, user, sol, deadline) {
+  const pos = new Chess(fen); let own = 0, onSol = true, matchPlies = 0; const notes = [];
+  for (let k = 0; k < user.length; k++) {
+    const mine = k % 2 === 0, u = user[k];
+    if (onSol && k < sol.length && u.uci === sol[k]) {
+      pos.move({ from: u.uci.slice(0, 2), to: u.uci.slice(2, 4), promotion: u.uci[4] }); matchPlies++; if (mine) own++;
+      if (pos.isCheckmate()) { notes.push(`${u.san}#: mate, as in the solution.`); break; }
+      continue;
+    }
+    const before = pos.fen();
+    if (mine) {
+      const test = new Chess(before); test.move({ from: u.uci.slice(0, 2), to: u.uci.slice(2, 4), promotion: u.uci[4] });
+      if (test.isCheckmate()) { own++; notes.push(`${u.san}: also mate. That works too!`); break; }
+      const g = await C.gradeMove(before, u.uci, 700);
+      if (g.drop < 3) { own++; onSol = false; notes.push(`${u.san}: different from the solution, but the engine finds it just as good.`); pos.move(u.san); continue; }
+      notes.push(`${u.san}: this goes wrong here (−${g.drop.toFixed(0)}% win chance). Stronger is ${g.bestLine.split(" ")[0]}.`); break;
+    } else {
+      const g = await C.gradeMove(before, u.uci, 500);
+      if (g.drop >= 10) { notes.push(`You assumed ${u.san} for your opponent, but they have a stronger defence: ${g.bestLine.split(" ")[0]}. Your line stops being reliable here.`); break; }
+      onSol = false; notes.push(`${u.san}: a reasonable reply you considered (not the main line, but no blunder).`); pos.move(u.san);
+    }
+  }
+  return { own, matchPlies, notes, onSol };
+}
+
+const KW = {
+  mate: ["mat", "mate", "checkmat"], fork: ["vork", "fork", "dubbele aanval", "double attack"], pin: ["pen", "pin", "gepend"], skewer: ["spies", "skewer", "doorschuif"],
+  sacrifice: ["offer", "sacrif", "sac "], promotion: ["promo", "dame halen", "promote", "queening"], defence: ["verdedig", "defen", "dreig", "threat", "dek", "cover", "redden"],
+  attack: ["koning", "king", "aanval", "attack"], trade: ["ruil", "trade", "exchang", "afruil"], space: ["ruimte", "space", "centrum", "centre", "center"],
+  weakness: ["zwak", "weak", "gat", "hole", "voorpost", "outpost", "isol"], prophylaxis: ["profyla", "prophyla", "voorkom", "prevent", "beperk", "restrict"],
+  coordination: ["coörd", "coord", "verbeter", "improve", "activ", "slechtste stuk", "worst piece", "ontwikkel", "develop"], endgame: ["eindspel", "endgame", "vrijpion", "passed", "oppositie", "opposition"],
+};
+const THEME_KW = { mate: ["mate", "attack"], defence: ["defence"], sacrifice: ["sacrifice"], quiet: ["prophylaxis", "coordination"], endgame: ["endgame"], calculation: [], tactics: ["fork", "pin", "skewer"],
+  initiative: ["attack", "space"], prophylaxis: ["prophylaxis"], restriction: ["prophylaxis"], coordination: ["coordination"], development: ["coordination"], space: ["space"], centrecontrol: ["space"],
+  exploitingweakness: ["weakness"], fixingstructure: ["weakness"], trading: ["trade"], kingsafety: ["defence", "attack"] };
+function ideaCheck(text, themes) {
+  const t = " " + (text || "").toLowerCase() + " ";
+  const said = Object.entries(KW).filter(([, ws]) => ws.some((w) => t.includes(w))).map(([k]) => k);
+  const want = [...new Set(themes.flatMap((x) => THEME_KW[x] || []))];
+  return { said, want, hit: said.filter((x) => want.includes(x)) };
+}
+
 // Runs one position. opts.test → part of a test; otherwise practice (opts.cat, opts.onDone)
 async function runItem(v, cur, C, opts) {
   const slot = opts.test ? cur.plan[cur.items.length] : { kind: TAC_CATS.includes(opts.cat) ? "tac" : "pos", cat: opts.cat };
   const est = opts.test ? cur.est : opts.est;
   const it = await pickItem({ items: opts.used || cur.items, est }, slot);
   if (!it) { v.innerHTML = `<div class="card"><p>No more positions in this category.</p></div>`; return; }
-  const fen = it.fen, stm = fen.split(" ")[1];
   window.__ccItem = it;
+  const fen = it.fen, stm = fen.split(" ")[1];
   const sol = slot.kind === "tac" ? it.sol.split(" ") : [it.best];
+  const solSan = (() => { const c = new Chess(fen); const o = []; for (const u of sol) { try { o.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } } return o; })();
   const nMine = Math.ceil(sol.length / 2);
-  v.innerHTML = `<div class="two"><div><div id="tb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="skip">I don't know / skip</button></div></div>
+  const themes = (it.c ? [it.c] : []).concat(it.t || it.th || []);
+  v.innerHTML = `<div class="two"><div><div id="tb"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
     <div><div class="card"><h2>${opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${C.esc(catLabel(opts.cat))}`}</h2>
       <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
-      <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Find the best move." : "There's no tactic, so find the move that fits the position best."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
-      <label class="f" style="margin-top:6px"><b style="color:var(--ink)">Why? (your reasoning)</b><textarea id="why" style="min-height:60px" placeholder="What do you see? Threats, weaknesses, plan…"></textarea></label>
-      <label class="f" style="margin-top:6px"><b style="color:var(--ink)">The line you calculated</b><input id="line" placeholder="e.g. Rxf7 Kxf7 Qh5+ Kg8 Qxe8"></label>
-      <p class="small muted">Then play your first move on the board.${slot.kind === "tac" ? " If it's right, you keep playing the line." : ""}</p>
-      <div id="tfb"></div></div></div></div>`;
-  const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm);
-  const t0 = Date.now(); let tFirst = null, step = 0, depth = 0, finished = false, firstMove = null, character = null;
+      <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Don't play on the board: write down your idea and the <b>whole line</b> you see, as far as you can calculate it." : "There's no direct tactic. Write down your move and the idea or plan behind it."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
+      <div id="stage"></div><div id="tfb"></div></div></div></div>`;
+  const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
+  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null;
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
-  const finish = async (score, note) => {
-    if (finished) return; finished = true; clearInterval(timer); brd.locked = true;
-    const sanLine = (() => { const c = new Chess(fen); const o = []; for (const u of sol) { try { o.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } } return o; })();
-    const planned = (v.querySelector("#line").value || "").split(/\s+/).map(normSan).filter((x) => x && !/^\d+\.+$/.test(x)).map((x) => x.replace(/^\d+\.+/, ""));
-    let match = 0; for (let k = 0; k < Math.min(planned.length, sanLine.length); k++) { if (normSan(sanLine[k]) === planned[k]) match++; else break; }
-    const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, depth, nMine, timeMs: (tFirst || Date.now()) - t0, totalMs: Date.now() - t0,
-      move: firstMove, character, why: v.querySelector("#why").value, line: v.querySelector("#line").value, plannedMatch: match, solution: sanLine.join(" "), themes: it.th || it.t || [], url: it.url || (it.id ? `https://lichess.org/training/${it.id}` : "") };
+  const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  const stepper = (lineSan, startFen) => {
+    let i = 0; const b = v.querySelector("#stepBtns");
+    b.innerHTML = `<button class="btn secondary small" id="sBack">◀</button><button class="btn secondary small" id="sFwd">▶ Play through the solution</button><button class="btn secondary small" id="toBoardIt">Open on Board</button>`;
+    const draw = () => { const c = new Chess(startFen); let last = null; for (let k = 0; k < i; k++) { const m = c.move(lineSan[k]); last = [m.from, m.to]; } brd.setFen(c.fen(), { last }); };
+    b.querySelector("#sBack").onclick = () => { i = Math.max(0, i - 1); draw(); };
+    b.querySelector("#sFwd").onclick = () => { i = Math.min(lineSan.length, i + 1); draw(); };
+    b.querySelector("#toBoardIt").onclick = () => C.go("board", { fen });
+  };
+
+  const finish = (note) => {
+    if (finished) return; finished = true; clearInterval(timer);
+    let score;
+    if (slot.kind === "pos") score = moveScore ?? 0;
+    else score = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
+    const idea = ideaCheck(ideaTxt, themes);
+    const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, depth: depthStart ?? 0, depthTotal, stages, nMine,
+      timeMs: (tSubmit || Date.now()) - t0, totalMs: Date.now() - t0, move: firstMove, character, why: ideaTxt, line: lineTxt, plannedMatch: depthStart ?? 0,
+      solution: solSan.join(" "), themes, notes: allNotes, ideaHit: idea.hit, url: it.url || (it.c ? `https://lichess.org/training/${it.id}` : "") };
     if (opts.test) {
       cur.items.push(rec);
       const K = Math.max(70, 320 / Math.sqrt(cur.items.length));
@@ -123,37 +194,65 @@ async function runItem(v, cur, C, opts) {
       const ce = cur.est[slot.cat] ?? cur.est.overall; cur.est[slot.cat] = ce + Math.max(90, 300 / Math.sqrt(cur.items.filter((x) => x.cat === slot.cat).length)) * (score - expected(it.r, ce));
     } else opts.onDone && opts.onDone(rec);
     C.save();
-    const pct = Math.round(score * 100);
-    v.querySelector("#tfb").innerHTML = `<div class="feedback ${score >= 0.99 ? "ok" : score > 0 ? "info" : "no"}"><b>${note}</b><br>Solution: <b>${C.esc(sanLine.join(" "))}</b>
-      <div class="small" style="margin-top:4px">Category: ${C.esc(catLabel(slot.cat))} · position rating ≈ ${it.r} · your time ${Math.round(rec.timeMs / 1000)} s${slot.kind === "tac" && nMine > 1 ? ` · depth found ${depth}/${nMine} moves` : ""}${planned.length ? ` · your calculated line matched for ${match} ply` : ""} · score ${pct}%</div>
-      ${rec.themes.length ? `<div class="small muted">Themes: ${C.esc(rec.themes.join(", "))}</div>` : ""}</div>
-      <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button><button class="btn secondary" id="toBoardIt">Open on Board</button></div>`;
+    v.querySelector("#stage").innerHTML = "";
+    v.querySelector("#tfb").innerHTML = `<div class="feedback ${score >= 0.99 ? "ok" : score > 0 ? "info" : "no"}"><b>${C.esc(note)}</b><br>Solution: <b>${C.esc(solSan.join(" "))}</b>
+      <div class="small" style="margin-top:6px">${slot.kind === "tac" ? `<b>Calculated from the start:</b> ${depthStart ?? 0} of ${nMine} of your moves${depthTotal > (depthStart ?? 0) ? ` · <b>with help</b> (after moves had been played): ${depthTotal} of ${nMine}` : ""}<br>` : ""}
+      Score for this position: <b>${Math.round(score * 100)}%</b> · time to your answer: ${Math.round(rec.timeMs / 1000)} s · category: ${C.esc(catLabel(slot.cat))} · position rating ≈ ${it.r}</div>
+      ${allNotes.length ? `<ul class="small">${allNotes.map((n) => `<li>${C.esc(n)}</li>`).join("")}</ul>` : ""}
+      ${ideaTxt ? `<div class="small"><b>Your idea</b> (rough keyword check): ${idea.hit.length ? `mentions ${C.esc(idea.hit.join(", "))}, which matches the themes of this position` : idea.said.length ? `mentions ${C.esc(idea.said.join(", "))}; the position is mainly about ${C.esc(idea.want.join(", ") || catLabel(slot.cat))}` : "no recognisable theme words"}. For real feedback on your reasoning: Results → "Copy for Claude".</div>` : ""}
+      ${themes.length ? `<div class="small muted">Themes: ${C.esc(themes.join(", "))}</div>` : ""}</div>
+      <p class="small muted">How the score works: a position counts for 100% if you saw the whole line from the start. Moves you only found after help count for half. For positional positions: the best move = 100%, an equally good alternative 70%, playable 40%.</p>
+      <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button></div>`;
+    stepper(solSan, fen);
     v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
-    v.querySelector("#toBoardIt").onclick = () => C.go("board", { fen });
+    scrollFb();
   };
-  v.querySelector("#skip").onclick = () => finish(0, "Skipped.");
-  brd.onMove = async (mv, before) => {
-    if (finished) return;
-    if (step === 0) { tFirst = Date.now(); firstMove = mv.san; character = moveCharacter(before, mv); }
-    const uci = mv.from + mv.to + (mv.promotion || "");
-    const isMate = brd.chess.isCheckmate();
-    if (slot.kind === "pos") {
-      if (uci === sol[0]) return finish(1, `${mv.san}: correct!`);
-      brd.locked = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Checking with the engine…</div>`;
-      const g = await C.gradeMove(before, uci, 1200);
-      const sc = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0;
-      return finish(sc, sc >= 0.7 ? `${mv.san}: a good alternative (the engine barely sees a difference).` : sc > 0 ? `${mv.san}: playable, but not the best plan.` : `${mv.san}: not the right idea (−${g.drop.toFixed(0)}% win chance).`);
-    }
-    if (uci === sol[step] || (isMate && step === sol.length - 1) || isMate) {
-      depth++; step++;
-      if (step >= sol.length || isMate) return finish(1, `Solved! ${depth} move${depth > 1 ? "s" : ""} found.`);
-      brd.locked = true;
-      setTimeout(() => { brd.play(sol[step]); step++; if (step >= sol.length) return finish(1, "Solved!"); brd.locked = false; v.querySelector("#tfb").innerHTML = `<div class="feedback ok">Right, keep going: ${depth}/${nMine}</div>`; }, 450);
-      return;
-    }
-    const sc = depth === 0 ? 0 : 0.8 * depth / nMine;
-    finish(sc, depth === 0 ? `${mv.san}: that's not it.` : `${mv.san}: you got ${depth} of ${nMine} moves right, then went wrong.`);
+
+  // stage: position after `pre` plies of the solution; user writes the rest
+  const stage = (pre) => {
+    const c = new Chess(fen); let last = null;
+    for (const u of sol.slice(0, pre)) { const m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); last = [m.from, m.to]; }
+    const sfen = c.fen(); brd.setFen(sfen, { last }); brd.setOrientation(stm);
+    const first = pre === 0;
+    v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> This counts as "with help".</div>`}
+      ${first ? `<label class="f" style="margin-top:6px"><b style="color:var(--ink)">Your idea: what's going on and why?</b><textarea id="why" style="min-height:60px" placeholder="E.g. 'The black king has no escape squares, so after Rxf7 there's a back-rank mate'"></textarea></label>` : ""}
+      <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${slot.kind === "tac" ? (first ? "Your line (your moves AND the opponent's replies)" : "Continue the line") : "Your move (optional: + how you continue)"}</b>
+      <input id="line" placeholder="${slot.kind === "tac" ? "e.g. Txf7 Kxf7 Dh5+ Kg8 Dxe8 (Dutch or English letters)" : "e.g. Pd2 (and then Pf1-e3)"}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <div id="perr" class="small" style="color:var(--bad);margin-top:4px"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit answer</button><button class="btn secondary" id="skip">${first ? "I don't know / skip" : "Show solution"}</button></div>`;
+    const inp = v.querySelector("#line");
+    inp.focus({ preventScroll: true });
+    inp.onkeydown = (e) => { if (e.key === "Enter") v.querySelector("#submit").click(); };
+    v.querySelector("#skip").onclick = () => finish(first ? "Skipped." : `You found ${depthTotal} of ${nMine} moves.`);
+    v.querySelector("#submit").onclick = async () => {
+      const txt = inp.value.trim();
+      if (!txt) { v.querySelector("#perr").textContent = "Write down at least your first move."; return; }
+      const parsed = parseLine(sfen, txt);
+      if (parsed.error) { v.querySelector("#perr").textContent = `"${parsed.error.token}" (move ${parsed.error.index + 1} of your line) is not a legal move${parsed.error.index ? " after the moves before it" : " in this position"}. Fix it and submit again; this doesn't count as a mistake.`; return; }
+      if (first) { tSubmit = Date.now(); ideaTxt = v.querySelector("#why").value; lineTxt = txt; const m0 = new Chess(fen).move(parsed.moves[0].san); firstMove = m0.san; character = moveCharacter(fen, m0); }
+      else lineTxt += " | " + txt;
+      v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your line…</div>`; scrollFb();
+      stages++;
+      if (slot.kind === "pos") {
+        const u = parsed.moves[0];
+        if (u.uci === sol[0]) { moveScore = 1; allNotes.push(`${u.san}: exactly the move the grandmaster panel chose.`); }
+        else { const g = await C.gradeMove(fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance).` : `${u.san}: not the right idea (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
+        if (parsed.moves.length > 2) { const gl = await gradeLine(C, fen, parsed.moves, sol); if (gl.own > 1) allNotes.push(`Your follow-up holds up for ${gl.own} of your moves.`); }
+        return finish(moveScore >= 1 ? "Correct!" : moveScore > 0 ? "Partly right." : "Not the right move.");
+      }
+      const gl = await gradeLine(C, sfen, parsed.moves, sol.slice(pre));
+      allNotes.push(...gl.notes.map((n) => (first ? "" : "(continued) ") + n));
+      const gotOwn = gl.own;
+      if (first) depthStart = gotOwn;
+      depthTotal = Math.ceil(pre / 2) + gotOwn;
+      if (depthTotal >= nMine || (gl.notes.some((n) => n.includes("mate")) && gotOwn > 0)) { depthTotal = Math.max(depthTotal, nMine); if (first) depthStart = nMine; return finish(first ? `Excellent! You saw the whole line (${nMine} moves) straight away.` : `Solved, after help: ${depthStart} from the start, ${nMine} in total.`); }
+      if (gotOwn === 0 && first) return finish("Your first move isn't right.");
+      if (!gl.onSol || gotOwn === 0) return finish(first ? `Partly: ${gotOwn} of ${nMine} moves sound.` : `With help you got to ${depthTotal} of ${nMine}.`);
+      // continue from the position after the correct moves + the opponent's reply
+      stage(pre + gotOwn * 2);
+    };
   };
+  stage(0);
 }
 
 // ------------------------------------------------------------------ PRACTICE (training modules)
@@ -189,7 +288,7 @@ export function computeResult(p, t, A = null) {
   const R = { elo, overall: perfRating(items, elo), tactical: perfRating(items.filter((i) => i.kind === "tac"), elo), positional: perfRating(items.filter((i) => i.kind === "pos"), elo), cats: {} };
   for (const [c, l] of Object.entries(cats)) R.cats[c] = { rating: perfRating(l, R.overall), n: l.length, score: Math.round(100 * l.reduce((a, x) => a + x.score, 0) / l.length) };
   const long = items.filter((i) => i.kind === "tac" && i.nMine >= 2);
-  R.depth = long.length ? { avg: +(long.reduce((a, x) => a + x.depth, 0) / long.length).toFixed(1), avgNeeded: +(long.reduce((a, x) => a + x.nMine, 0) / long.length).toFixed(1), full: long.filter((x) => x.score >= 0.99).length, n: long.length } : null;
+  R.depth = long.length ? { avg: +(long.reduce((a, x) => a + x.depth, 0) / long.length).toFixed(1), avgHelp: +(long.reduce((a, x) => a + (x.depthTotal ?? x.depth), 0) / long.length).toFixed(1), avgNeeded: +(long.reduce((a, x) => a + x.nMine, 0) / long.length).toFixed(1), full: long.filter((x) => x.score >= 0.99).length, n: long.length } : null;
   const planned = items.filter((i) => (i.line || "").trim());
   R.planned = planned.length ? { n: planned.length, avgMatch: +(planned.reduce((a, x) => a + x.plannedMatch, 0) / planned.length).toFixed(1) } : null;
   const times = items.filter((i) => i.move).map((i) => i.timeMs / 1000).sort((a, b) => a - b);
@@ -240,15 +339,15 @@ export function resultsView(v, C) {
     <div class="stat"><div class="v">${R.tactical}</div><div class="l">tactical</div></div><div class="stat"><div class="v">${R.positional}</div><div class="l">positional</div></div>
     ${R.depth ? `<div class="stat"><div class="v">${R.depth.avg}/${R.depth.avgNeeded}</div><div class="l">calculation depth (moves found / needed)</div></div>` : ""}
     ${R.time ? `<div class="stat"><div class="v">${R.time.median}s</div><div class="l">median time to first move</div></div>` : ""}</div>
-    <p class="small muted">Test ratings come from the puzzle ratings (Lichess scale) and your scores. Lichess puzzle ratings tend to run somewhat higher than game ratings, and one test of ${t.items.length} positions gives an indication (±150), not an exact number. Compare above all your <b>categories with each other</b>.</p></div>
+    <p class="small muted"><b>Test rating</b> = the rating at which your result would be "expected", worked out from the difficulty (rating) of each position and your score on it, the way a performance rating is calculated in a tournament. Test ratings come from the puzzle ratings (Lichess scale) and your scores. Lichess puzzle ratings tend to run somewhat higher than game ratings, and one test of ${t.items.length} positions gives an indication (±150), not an exact number. Compare above all your <b>categories with each other</b>.</p></div>
     <div class="card"><h2>Per category (weakest first)</h2><table>${rows.map(([c, x]) => `<tr><td>${C.esc(catLabel(c))}</td><td style="width:40%">${bar(x.rating)}</td><td><b>${x.rating}</b> <span class="small muted">${x.rating - R.elo >= 0 ? "+" : ""}${x.rating - R.elo} vs Elo · ${x.n} pos.</span></td><td><button class="btn secondary small" data-prac="${C.esc(c)}">Train</button></td></tr>`).join("")}</table></div>
     <div class="card"><h2>How do you think?</h2><ul class="small">
-      ${R.depth ? `<li><b>Calculation depth:</b> on positions with 2+ moves you found on average ${R.depth.avg} of ${R.depth.avgNeeded} moves; ${R.depth.full}/${R.depth.n} fully solved. ${R.depth.avg / R.depth.avgNeeded < 0.6 ? "You often stop calculating too early: keep going until the position is quiet (no more checks or captures)." : "You calculate lines through well."}</li>` : ""}
-      ${R.planned ? `<li><b>Your written lines:</b> on average ${R.planned.avgMatch} ply matched the solution (${R.planned.n} positions with a line).</li>` : `<li>You didn't write down any lines. Next time, write the line you calculated, so you can see how far you thought ahead.</li>`}
+      ${R.depth ? `<li><b>Calculation depth:</b> on positions with 2+ moves, you saw on average <b>${R.depth.avg} of ${R.depth.avgNeeded}</b> of your moves <b>from the start</b>, and <b>${R.depth.avgHelp}</b> once the first moves had been played for you. ${R.depth.full}/${R.depth.n} completely right from the start. ${R.depth.avgHelp - R.depth.avg >= 0.7 ? "Big gap between 'from the start' and 'with help': you do find the moves, but you don't see them far enough ahead. Train by calculating long puzzles without moving the pieces, and write down the whole line." : R.depth.avg / R.depth.avgNeeded < 0.6 ? "You often stop calculating too early: keep going until the position is quiet (no more checks or captures)." : "You calculate lines through well."}</li>` : ""}
+
       ${R.time ? `<li><b>Time:</b> median ${R.time.median}s to your first move${R.time.correct ? `; right answers ${R.time.correct}s` : ""}${R.time.wrong ? `, wrong answers ${R.time.wrong}s` : ""}. ${R.time.wrong && R.time.correct && R.time.wrong < R.time.correct * 0.7 ? "Your wrong answers came faster than your right ones: you play too quickly when you think you see it. Do a blunder check!" : ""}</li>` : ""}
       <li><b>Character of your moves:</b> ${R.character.aggressive}% aggressive (check, capture, toward the king), ${R.character.solid}% solid. ${R.character.nWrong ? `Of your wrong answers, ${R.character.wrongAggressive}% were aggressive and ${R.character.wrongSolid}% solid.` : ""}</li></ul></div>
-    <div class="card"><h2>Your answers</h2><div class="scroll"><table><tr><th>#</th><th>Category</th><th>Rating</th><th>Your move</th><th>Solution</th><th>Score</th><th>Time</th><th>Your reasoning</th></tr>
-      ${t.items.map((i, k) => `<tr><td>${k + 1}</td><td class="small">${C.esc(catLabel(i.cat))}</td><td>${i.rating}</td><td>${C.esc(i.move || "–")}</td><td class="small">${C.esc(i.solution)}</td><td>${Math.round(i.score * 100)}%</td><td>${Math.round(i.timeMs / 1000)}s</td><td class="small">${C.esc(i.why || "")}${i.line ? `<br><i>line: ${C.esc(i.line)}</i>` : ""}</td></tr>`).join("")}</table></div>
+    <div class="card"><h2>Your answers</h2><div class="scroll"><table><tr><th>#</th><th>Category</th><th>Rating</th><th>Your line</th><th>Solution</th><th>Depth</th><th>Score</th><th>Time</th><th>Your reasoning</th></tr>
+      ${t.items.map((i, k) => `<tr><td>${k + 1}</td><td class="small">${C.esc(catLabel(i.cat))}</td><td>${i.rating}</td><td class="small">${C.esc(i.line || i.move || "–")}</td><td class="small">${C.esc(i.solution)}</td><td class="small">${i.kind === "tac" ? `${i.depth}${(i.depthTotal ?? i.depth) > i.depth ? `→${i.depthTotal}` : ""}/${i.nMine}` : "–"}</td><td>${Math.round(i.score * 100)}%</td><td>${Math.round(i.timeMs / 1000)}s</td><td class="small">${C.esc(i.why || "")}</td></tr>`).join("")}</table></div>
       <div class="row" style="margin-top:8px"><button class="btn secondary" id="copyT">Copy for Claude (feedback on my reasoning)</button><button class="btn" id="toProf">See my player profile</button></div></div>`;
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
   v.querySelector("#toProf").onclick = () => C.go("profile");
