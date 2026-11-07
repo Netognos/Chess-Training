@@ -756,7 +756,20 @@ function markdownLog(p) {
   return L.join("\n");
 }
 
+// ------------------------------------------------------------------ install as app (PWA)
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW registration failed", e));
+let installEvt = null;
+const standalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; $("#installBtn").classList.remove("hidden"); });
+window.addEventListener("appinstalled", () => { $("#installBtn").classList.add("hidden"); toast("Chess Coach is installed"); });
+$("#installBtn").onclick = async () => {
+  if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("#installBtn").classList.add("hidden"); return; }
+  alert("iPhone/iPad: tap the Share button in Safari, then 'Add to Home Screen'.\nAndroid: Chrome menu ⋮ → 'Install app'.\nComputer: the install icon at the right of the Chrome/Edge address bar.");
+};
+if (!standalone() && /iPhone|iPad|iPod/.test(navigator.userAgent)) $("#installBtn").classList.remove("hidden");
+
 // ------------------------------------------------------------------ boot
 if (!S.current || !S.players[S.current]) S.current = Object.keys(S.players)[0] || null;
-go("home");
+const startTab = new URLSearchParams(location.search).get("tab");
+go(startTab && views[startTab] ? startTab : "home");
 window.__chesscoach = { get state() { return S; }, go };
