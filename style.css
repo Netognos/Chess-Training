@@ -94,3 +94,6 @@ img.ghost { position: fixed; pointer-events: none; z-index: 100; }
 .step.done { border-color: var(--good); }
 .step .n { font-weight: 700; color: var(--accent); }
 .step.done .n::after { content: " ✓"; color: var(--good); }
+
+#jobBar { position: sticky; top: 139px; z-index: 3; background: var(--card); border-bottom: 1px solid var(--line); padding: 8px 14px; }
+@media (max-width: 760px) { #jobBar { top: 137px; } }

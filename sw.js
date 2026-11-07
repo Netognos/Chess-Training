@@ -1,6 +1,6 @@
 // Service worker: makes Chess Coach installable and usable offline.
 // Bump VERSION on every release so installed apps pick up the new files.
-const VERSION = "cc-v4";
+const VERSION = "cc-v5";
 const CORE = [
   "./", "index.html", "style.css", "manifest.webmanifest",
   "app.js", "analysis.js", "board.js", "coach.js", "data.js", "engine.js", "pieces.js", "reader.js", "test.js", "testbank.js",

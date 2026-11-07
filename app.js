@@ -146,8 +146,9 @@ function games(v) {
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
     <label class="row small" style="margin-top:10px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for the style statistics on games from before this update)</label>
-    <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button><button class="btn secondary hidden" id="stop">Stop</button></div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
+    <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
     <p class="small muted">"Time control at least 10+0" counts a game as base time + 40 × increment, so 8+2 also qualifies. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster.</p></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Opening</th></tr>
     ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
@@ -159,7 +160,10 @@ function games(v) {
   srcP.onchange();
   $("#pgnFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#pgnText").value = await f.text(); };
   $("#go").onclick = () => runImport(v);
-  $("#stop").onclick = () => { if (running) running.stop = true; };
+  const pq = loadQueue();
+  if (running) { $("#prog").classList.remove("hidden"); }
+  else if (pq && pq.items?.length) { $("#prog").classList.remove("hidden"); $("#progText").innerHTML = `Paused analysis: ${pq.items.length} games left. <a href="#" id="resumeQ">Continue</a> · <a href="#" id="dropQ">Cancel</a>`;
+    $("#resumeQ").onclick = (e) => { e.preventDefault(); processQueue(pq); }; $("#dropQ").onclick = (e) => { e.preventDefault(); saveQueue(null); go("games"); }; }
   if ($("#clearG")) $("#clearG").onclick = () => { if (confirm("Delete all analysed games for this player? (Puzzles and log are kept.)")) { p.games = {}; save(); go("games"); } };
 }
 
@@ -209,53 +213,89 @@ async function fetchGames(p, opts, status) {
   return out.slice(0, opts.num);
 }
 
+// ---- analysis job: a persisted queue, so it can resume after the phone locks or kills the app
+const QKEY = "chesscoach.queue";
+const loadQueue = () => { try { return JSON.parse(localStorage.getItem(QKEY)); } catch { return null; } };
+function saveQueue(q) { try { if (q) localStorage.setItem(QKEY, JSON.stringify(q)); else localStorage.removeItem(QKEY); return true; } catch { return false; } }
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && "wakeLock" in navigator && document.visibilityState === "visible" && !wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => (wakeLock = null)); }
+    if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (e) { console.warn("Wake lock", e); }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && running) keepAwake(true); });
+function jobUI(text, pct) {
+  const b = $("#jobBar"); b.classList.remove("hidden");
+  $("#jobText").textContent = text; if (pct !== undefined) $("#jobFill").style.width = pct.toFixed(1) + "%";
+  const t = $("#progText"); if (t) { $("#prog").classList.remove("hidden"); t.textContent = text; if (pct !== undefined) $("#progBar").style.width = pct.toFixed(1) + "%"; }
+}
+function jobDone(text) {
+  $("#jobText").textContent = text; $("#jobStop").classList.add("hidden");
+  const t = $("#progText"); if (t) t.textContent = text;
+  setTimeout(() => { if (!running) $("#jobBar").classList.add("hidden"); }, 6000);
+}
+
 async function runImport(v) {
   const p = P();
+  if (running) return toast("An analysis is already running");
   const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, mintc: +$("#mintc").value, num: +$("#num").value || 100 };
   const movetime = +$("#speed").value;
   const re = $("#reanalyse").checked;
   const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.pgn && "PGN"].filter(Boolean).join(" + ");
-  const prog = $("#prog"), txt = $("#progText"), bar = $("#progBar");
-  prog.classList.remove("hidden"); $("#go").disabled = true; $("#stop").classList.remove("hidden");
-  running = { stop: false };
+  $("#prog").classList.remove("hidden"); $("#go").disabled = true;
   try {
     if (!opts.lichess && !opts.chesscom && !opts.pgn) throw new Error("Choose at least one source.");
-    const list = await fetchGames(p, opts, (t) => (txt.textContent = t));
+    const list = await fetchGames(p, opts, (t) => ($("#progText").textContent = t));
     if (!list.length) throw new Error("No games found for this period and time control.");
-    const todo = list.filter((x) => { const l = (/\[Link "([^"]+)"/.exec(x.pgn) || [])[1]; const s2 = (/\[Site "([^"]+)"/.exec(x.pgn) || [])[1]; const id = l || (s2 && s2.startsWith("http") ? s2 : null); return re || !(id && p.games[id]); }).length;
-    txt.textContent = `${list.length} games found (${todo} new). Estimated time: ~${Math.max(1, Math.round(todo * movetime / 150 * 12 / 60))} min.`;
-    await new Promise((r) => setTimeout(r, 1200));
-    const pgns = list.map((x) => x.pgn);
-    txt.textContent = "Starting Stockfish…";
-    const eng = getEngine(); await eng.ready;
-    let done = 0, added = 0, skipped = 0;
-    for (const [gi, pgn] of pgns.entries()) {
-      if (running.stop) break;
-      const name = list[gi].name;
-      const site = (/\[Site "([^"]+)"/.exec(pgn) || [])[1];
-      const link = (/\[Link "([^"]+)"/.exec(pgn) || [])[1];
-      const gid = link || (site && site.startsWith("http") ? site : null);
-      if (gid && p.games[gid] && !re) { done++; skipped++; continue; }
-      let r;
-      try {
-        r = await analyseGame(eng, pgn, name, { movetime }, (k, n) => {
-          txt.textContent = `Game ${done + 1} of ${pgns.length} (${list[gi].src}): position ${k}/${n}`;
-          bar.style.width = (100 * (done + k / n) / pgns.length).toFixed(1) + "%";
-        });
-      } catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
-      done++;
-      if (r.skipped) { skipped++; continue; }
-      if (link) { r.site = link; r.id = link; }
-      p.games[r.id] = r; added++; save();
-      bar.style.width = (100 * done / pgns.length).toFixed(1) + "%";
-    }
-    txt.textContent = `Done: ${added} new games analysed${skipped ? `, ${skipped} skipped (already done, too short, or the name doesn't match)` : ""}.`;
-    if (added) { buildReport(p); logEvent("analysis", `${added} games analysed (${src}). Total ${Object.keys(p.games).length}.`); toast("Analysis done. See Report."); setTimeout(() => go("report"), 900); }
-    else if (skipped && !added) txt.textContent += " All games were already analysed, or the name didn't match.";
+    const gidOf = (pgn) => { const l = (/\[Link "([^"]+)"/.exec(pgn) || [])[1]; const s2 = (/\[Site "([^"]+)"/.exec(pgn) || [])[1]; return l || (s2 && s2.startsWith("http") ? s2 : null); };
+    const items = list.filter((x) => { const id = gidOf(x.pgn); return re || !(id && p.games[id]); });
+    if (!items.length) { $("#progText").textContent = `${list.length} games found, all already analysed.`; return; }
+    const q = { player: p.id, items, total: items.length, done: 0, added: 0, skipped: 0, movetime, src, started: new Date().toISOString() };
+    if (!saveQueue(q)) toast("Couldn't save the queue (storage full): this analysis can't resume if the app gets closed.");
+    $("#progText").textContent = `${list.length} games found, ${items.length} to analyse. Estimated time: ~${Math.max(1, Math.round(items.length * movetime / 150 * 12 / 60))} min.`;
+    processQueue(q);
   } catch (e) {
     console.error(e);
-    txt.innerHTML = `<span style="color:var(--bad)">${esc(e.message || e)}</span> · If downloading doesn't work, export the PGN from the website and paste it under 'PGN'.`;
-  } finally { $("#go").disabled = false; $("#stop").classList.add("hidden"); running = null; }
+    $("#progText").innerHTML = `<span style="color:var(--bad)">${esc(e.message || e)}</span> · If downloading doesn't work, export the PGN from the website and paste it under 'PGN'.`;
+  } finally { const g = $("#go"); if (g) g.disabled = false; }
+}
+
+async function processQueue(q) {
+  if (running) return;
+  const p = S.players[q.player];
+  if (!p) { saveQueue(null); return; }
+  running = { stop: false };
+  $("#jobStop").classList.remove("hidden");
+  await keepAwake(true);
+  jobUI(`Starting Stockfish… (${q.total - q.done} games to go)`);
+  try {
+    const eng = getEngine(); await eng.ready;
+    while (q.items.length && !running.stop) {
+      const it = q.items[0];
+      let r;
+      try {
+        r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime }, (k, n) =>
+          jobUI(`Analysing ${p.name}: game ${q.done + 1} of ${q.total} (${it.src}) · position ${k}/${n}${wakeLock ? " · screen stays on" : ""}`, 100 * (q.done + k / n) / q.total));
+      } catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
+      if (running.stop) break;
+      q.items.shift(); q.done++;
+      if (r.skipped) q.skipped++;
+      else { const link = (/\[Link "([^"]+)"/.exec(it.pgn) || [])[1]; if (link) { r.site = link; r.id = link; } p.games[r.id] = r; q.added++; save(); }
+      saveQueue(q);
+    }
+    if (running.stop) { jobDone(`Paused: ${q.items.length} games left. Continue later via Games.`); return; }
+    saveQueue(null);
+    jobDone(`Done: ${q.added} games analysed${q.skipped ? `, ${q.skipped} skipped (too short or the name didn't match)` : ""}.`);
+    if (q.added) { buildReport(p); logEvent("analysis", `${q.added} games analysed (${q.src}). Total ${Object.keys(p.games).length}.`); toast("Analysis done. See Report."); if (S.current === p.id && tab === "games") setTimeout(() => go("report"), 900); }
+  } finally { running = null; keepAwake(false); }
+}
+function resumeBanner() {
+  const q = loadQueue();
+  if (!q || running) return;
+  if (!S.players[q.player] || !q.items?.length) { saveQueue(null); return; }
+  jobUI(`Analysis paused for ${S.players[q.player].name}: ${q.items.length} of ${q.total} games left. Resuming…`, 100 * q.done / q.total);
+  setTimeout(() => processQueue(q), 1500);
 }
 
 function buildReport(p) {
@@ -770,6 +810,8 @@ if (!standalone() && /iPhone|iPad|iPod/.test(navigator.userAgent)) $("#installBt
 
 // ------------------------------------------------------------------ boot
 if (!S.current || !S.players[S.current]) S.current = Object.keys(S.players)[0] || null;
+$("#jobStop").onclick = () => { if (running) { running.stop = true; $("#jobText").textContent = "Stopping after this position…"; } };
+setTimeout(resumeBanner, 800);
 const startTab = new URLSearchParams(location.search).get("tab");
 go(startTab && views[startTab] ? startTab : "home");
 window.__chesscoach = { get state() { return S; }, go };
