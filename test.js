@@ -56,25 +56,31 @@ export async function testView(v, C) {
       <p class="small muted">Tip: play it like a game. Think, write down your reasoning and the line you calculated, then move. The category stays hidden until you've answered.</p>
       <div class="row"><button class="btn" data-mode="quick">Quick test (12 positions, ~20 min)</button><button class="btn secondary" data-mode="full">Full test (32 positions, ~50 min)</button></div>
       ${last ? `<p class="small" style="margin-top:10px">Last test: ${C.esc(last.date)}, overall ${last.result?.overall ?? "–"}. <a href="#" id="toRes">See results</a></p>` : ""}</div>
-      <div class="card"><h2>AI coach (Gemini, free)</h2>
-        <p class="small">With an AI key, an AI reads your written reasoning and checks how far you saw: the <b>idea</b> (e.g. the fork), the <b>danger</b> (e.g. capturing straight away loses your queen) and the <b>follow-up & plan</b> (e.g. move the queen first, keep the opponent passive). Rejecting the move for the right reason counts as half right. Stockfish supplies the chess facts; the AI only judges your text.</p>
-        <ol class="small"><li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with a Google account.</li><li>Click <b>Create API key</b> and copy it (free, no credit card needed).</li><li>Paste it here and click Save.</li></ol>
-        <div class="row"><input id="aiKey" type="password" class="grow" placeholder="Gemini API key" value="${aiKey() ? "••••••••••••" : ""}"><button class="btn secondary" id="aiSave">Save</button><button class="btn secondary" id="aiTest">Test</button>${aiKey() ? `<button class="btn secondary" id="aiDel">Remove</button>` : ""}</div>
-        <div id="aiMsg" class="small" style="margin-top:6px">${aiKey() ? "✓ AI coach is on." : "AI coach is off."}</div>
-        <p class="small muted">Your key stays in this browser only (not in backups or on GitHub). Position, moves and your notes are sent to Google Gemini for the assessment. Free tier: a limited number of requests per minute.</p></div>
+      <div class="card" id="aiCard"></div>
       <div class="card"><h2>Training modules</h2><p class="small">Practise one category at a time around your level, without a test score. Your results appear in the Log.</p>
       <div class="row">${TAC_CATS.concat(Object.keys(POS_GROUPS)).map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">${C.esc(catLabel(c))}</button>`).join("")}</div></div>`;
     v.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = async () => { await startTest(p, b.dataset.mode, C); C.go("test"); }));
-    const msg = v.querySelector("#aiMsg");
-    v.querySelector("#aiSave").onclick = () => { const k = v.querySelector("#aiKey").value.trim(); if (!k || k.startsWith("•")) return; setAiKey(k); msg.textContent = "Saved. Click Test to check it."; };
-    v.querySelector("#aiTest").onclick = async () => { msg.textContent = "Testing…"; try { const r = await testKey(); msg.textContent = r.ok ? `✓ Works (model: ${r.model}).` : "Unexpected answer."; } catch (e) { msg.textContent = "✗ " + (e.message || e); } };
-    v.querySelector("#aiDel") && (v.querySelector("#aiDel").onclick = () => { setAiKey(""); C.go("test"); });
+    aiSettings(v.querySelector("#aiCard"));
     v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
     v.querySelector("#toRes") && (v.querySelector("#toRes").onclick = (e) => { e.preventDefault(); C.go("results"); });
     return;
   }
   if (cur.items.length >= cur.plan.length) return questionnaireView(v, cur, C);
   await runItem(v, cur, C, { test: true });
+}
+
+// AI key settings card (used on the test start page, during a test and on the profile page)
+export function aiSettings(el) {
+  el.innerHTML = `<h2>AI coach (Gemini, free)</h2>
+        <p class="small">With an AI key, an AI reads your written reasoning and checks how far you saw: the <b>idea</b> (e.g. the fork), the <b>danger</b> (e.g. capturing straight away loses your queen) and the <b>follow-up & plan</b> (e.g. move the queen first, keep the opponent passive). Rejecting the move for the right reason counts as half right. Stockfish supplies the chess facts; the AI only judges your text.</p>
+        <ol class="small"><li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with a Google account.</li><li>Click <b>Create API key</b> and copy it (free, no credit card needed).</li><li>Paste it here and click Save.</li></ol>
+        <div class="row"><input id="aiKey" type="password" class="grow" placeholder="Gemini API key" value="${aiKey() ? "••••••••••••" : ""}"><button class="btn secondary" id="aiSave">Save</button><button class="btn secondary" id="aiTest">Test</button>${aiKey() ? `<button class="btn secondary" id="aiDel">Remove</button>` : ""}</div>
+        <div id="aiMsg" class="small" style="margin-top:6px">${aiKey() ? "✓ AI coach is on." : "AI coach is off."}</div>
+        <p class="small muted">Your key stays in this browser only (not in backups or on GitHub). Position, moves and your notes are sent to Google Gemini for the assessment. Free tier: a limited number of requests per minute.</p>`;
+  const msg = el.querySelector("#aiMsg");
+  el.querySelector("#aiSave").onclick = () => { const k = el.querySelector("#aiKey").value.trim(); if (!k || k.startsWith("•")) return; setAiKey(k); msg.textContent = "Saved. Click Test to check it."; };
+  el.querySelector("#aiTest").onclick = async () => { msg.textContent = "Testing…"; try { const r = await testKey(); msg.textContent = r.ok ? `✓ Works (model: ${r.model}).` : "Unexpected answer."; } catch (e) { msg.textContent = "✗ " + (e.message || e); } };
+  el.querySelector("#aiDel") && (el.querySelector("#aiDel").onclick = () => { setAiKey(""); aiSettings(el); });
 }
 
 async function startTest(p, mode, C) {
@@ -175,8 +181,10 @@ async function runItem(v, cur, C, opts) {
     <div><div class="card"><h2>${opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${C.esc(catLabel(opts.cat))}`}</h2>
       <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
       <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Don't play on the board: write down your idea and the <b>whole line</b> you see, as far as you can calculate it." : "There's no direct tactic. Write down your move and the idea or plan behind it."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
+      <div class="small" style="margin:6px 0">AI coach: ${aiKey() ? "<b>on</b>" : "<b>off</b>"} · <a href="#" id="aiToggle">${aiKey() ? "settings" : "set up (free)"}</a></div><div id="aiInline" class="card hidden"></div>
       <div id="stage"></div><div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
+  v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
   const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null;
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -396,7 +404,7 @@ export function profileView(v, C) {
   const t = (p.tests || []).filter((x) => x.done).slice(-1)[0];
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
-  if (!t && !A) { v.innerHTML = `<div class="card"><h2>Player profile</h2><p>Analyse your games (Analyse → Games) and/or take the test first.</p></div>`; return; }
+  if (!t && !A) { v.innerHTML = `<div class="card"><h2>Player profile</h2><p>Analyse your games (Analyse → Games) and/or take the test first.</p></div><div class="card" id="aiCardP"></div>`; aiSettings(v.querySelector("#aiCardP")); return; }
   const R = t ? computeResult(p, t, A) : null;
   const type = R ? R.type : guessTypeFromGames(A);
   const T = PLAYER_TYPES[type], O = STYLE_OPENINGS[type];
@@ -430,8 +438,10 @@ export function profileView(v, C) {
       <div class="small"><b>White:</b><ul>${O.white.map(([l, w]) => `<li><b>${C.esc(l)}</b>: ${C.esc(w)}</li>`).join("")}</ul><b>Black:</b><ul>${O.black.map(([l, w]) => `<li><b>${C.esc(l)}</b>: ${C.esc(w)}</li>`).join("")}</ul>
       <p><b>Uncomfortable for your type:</b> ${C.esc(O.hard)}</p>
       <p class="muted">Advice: pick an opening that fits your style, but also train the opposite. An activist who only plays sharp lines never learns to defend, and a reflector who avoids sharp positions keeps calculating poorly.</p></div></div>
+    <div class="card" id="aiCardP"></div>
     <div class="card"><div class="row"><button class="btn secondary" id="copyProf">Copy profile for Claude (opening & training plan)</button></div></div>`;
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
+  aiSettings(v.querySelector("#aiCardP"));
   v.querySelector("#copyProf").onclick = () => C.copy(`My chess profile. Build a concrete opening repertoire (with variations) and a 4-week training plan that fit me.\n\nRating ${R ? R.elo : playerElo(p)}${R ? `, test rating ${R.overall} (tactical ${R.tactical}, positional ${R.positional})` : ""}.\nPlayer type: ${T.name}${R ? ` (${Object.entries(R.types).map(([k, x]) => `${PLAYER_TYPES[k].name} ${x}%`).join(", ")})` : ""}. Aggressive/defensive: ${aggr ?? "?"}/100.\n` +
     (R ? `Categories: ${Object.entries(R.cats).map(([c, x]) => `${catLabel(c)} ${x.rating}`).join(", ")}.\n` : "") + (R?.depth ? `Calculation depth: ${R.depth.avg}/${R.depth.avgNeeded}. Median time ${R.time?.median}s.\n` : "") +
     (S ? `Games: accuracy ahead/equal/behind ${S.acc.ahead}/${S.acc.equal}/${S.acc.behind}; sacrifices ${S.sacPer10}/10 games; opposite-side castling ${S.oppCastlePct}%.\n` : "") +
