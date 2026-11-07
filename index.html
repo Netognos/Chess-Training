@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Coach</title>
+<meta name="description" content="Personal chess trainer: analyse your Lichess / Chess.com games, find your weaknesses, train with puzzles from your own mistakes and endgame drills.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♞</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">♞ Chess Coach</div>
+  <div class="player-pick"><select id="playerSelect" aria-label="Player"></select></div>
+</header>
+<nav id="tabs">
+  <button data-tab="home" class="active">Home</button>
+  <button data-tab="games">Games</button>
+  <button data-tab="report">Report</button>
+  <button data-tab="puzzles">Puzzles</button>
+  <button data-tab="endgames">Endgames</button>
+  <button data-tab="board">Board</button>
+  <button data-tab="log">Log</button>
+</nav>
+<main id="view"></main>
+<div id="toast" class="hidden"></div>
+<footer>Stockfish 19 runs in your browser · Your data stays in this browser: use <b>Log → Backup</b> to save it or move it to another device · <a href="https://github.com/official-stockfish/Stockfish" target="_blank" rel="noopener">Stockfish</a> (GPLv3)</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
