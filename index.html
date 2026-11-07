@@ -13,16 +13,8 @@
   <div class="brand">♞ Chess Coach</div>
   <div class="player-pick"><select id="playerSelect" aria-label="Player"></select></div>
 </header>
-<nav id="tabs">
-  <button data-tab="home" class="active">Home</button>
-  <button data-tab="games">Games</button>
-  <button data-tab="report">Report</button>
-  <button data-tab="puzzles">Puzzles</button>
-  <button data-tab="endgames">Endgames</button>
-  <button data-tab="board">Board</button>
-  <button data-tab="notebook">Notebook</button>
-  <button data-tab="log">Log</button>
-</nav>
+<div id="sections" class="sections"><button data-sec="analyse" class="active">Analyse</button><button data-sec="test">Test & profile</button></div>
+<nav id="tabs"></nav>
 <main id="view"></main>
 <div id="toast" class="hidden"></div>
 <footer>Stockfish 19 runs in your browser · Your data stays in this browser: use <b>Log → Backup</b> to save it or move it to another device · <a href="https://github.com/official-stockfish/Stockfish" target="_blank" rel="noopener">Stockfish</a> (GPLv3)</footer>

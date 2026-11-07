@@ -5,6 +5,7 @@ import { splitPgn, analyseGame, aggregate, pvToSan, parseGame } from "./analysis
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
+import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo } from "./test.js";
 
 // ------------------------------------------------------------------ state
 const KEY = "chesscoach.v1";
@@ -37,16 +38,29 @@ function newPlayer(d) {
 function srs(item, ok) { item.attempts = (item.attempts || 0) + 1; if (ok) { item.successes = (item.successes || 0) + 1; item.box = Math.min((item.box || 0) + 1, 5); } else item.box = 1; item.due = addDays(INTERVALS[item.box]); item.last = today(); item.lastOk = ok; }
 
 // ------------------------------------------------------------------ routing
-const views = { home, games, report, puzzles, endgames, board, notebook, log };
+const SECTIONS = {
+  analyse: [["home", "Start"], ["games", "Games"], ["report", "Report"], ["training", "Training"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"], ["log", "Log"]],
+  test: [["test", "Test"], ["results", "Results"], ["profile", "Profile"], ["practice", "Modules"]],
+};
+const C = { P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate };
+const views = { home, games, report, training, puzzles, endgames, board, notebook, log,
+  test: (v) => testView(v, C), results: (v) => resultsView(v, C), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
+const sectionOf = (t) => (SECTIONS.test.some(([k]) => k === t) ? "test" : "analyse");
+function renderNav() {
+  const sec = sectionOf(tab);
+  document.querySelectorAll("#sections button").forEach((b) => { b.classList.toggle("active", b.dataset.sec === sec); b.onclick = () => go(b.dataset.sec === "test" ? "test" : "home"); });
+  $("#tabs").innerHTML = SECTIONS[sec].map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? "active" : ""}">${l}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => go(b.dataset.tab)));
+}
 function go(t, arg) {
   tab = t;
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
   const v = $("#view"); v.innerHTML = "";
-  if (!P() && t !== "home") { tab = "home"; home(v); return renderPicker(); }
-  views[t](v, arg); renderPicker(); window.scrollTo(0, 0);
+  if (!P() && t !== "home") { tab = "home"; renderNav(); home(v); return renderPicker(); }
+  renderNav();
+  Promise.resolve(views[t](v, arg)).catch((e) => { console.error(e); v.innerHTML = `<div class="card"><p style="color:var(--bad)">Something went wrong: ${esc(e.message || e)}</p></div>`; });
+  renderPicker(); window.scrollTo(0, 0);
 }
-document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => go(b.dataset.tab)));
 function renderPicker() {
   const sel = $("#playerSelect");
   const ps = Object.values(S.players);
@@ -62,7 +76,8 @@ function home(v) {
       <p class="muted">Each player gets their own profile, analysis, training plan and log. Fill in at least a name. The usernames let the app download your games.</p>
       ${profileForm({})}<div class="row" style="margin-top:12px"><button class="btn" id="create">Create player</button></div></div>
       <div class="card"><h2>How it works</h2><ol>
-      <li><b>Games</b>: import your games from Lichess / Chess.com, or a PGN file, and analyse them with Stockfish.</li>
+      <li><b>Games</b>: load the last months of your Lichess and/or Chess.com games (at least 10+0) and analyse them with Stockfish.</li>
+      <li><b>Test & profile</b> (second part): a test with positions where you give your move and the reason why. It measures calculation depth, time and style, and works out your player type, the openings that fit you and your work points.</li>
       <li><b>Report</b>: your strengths, weaknesses and a weekly training plan.</li>
       <li><b>Puzzles</b>: your own mistakes as puzzles, repeated at spaced intervals.</li>
       <li><b>Endgames</b>: theory positions to know, played out against the engine.</li>
@@ -75,7 +90,12 @@ function home(v) {
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
   const dueEg = allEndgames(p).filter((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }).length;
   const last = p.reports[0];
-  v.innerHTML = `<div class="card"><h2>${esc(p.name)}</h2>
+  const nG = Object.keys(p.games).length;
+  const stepsDef = [["1", "Profile", !!p.name, "home"], ["2", "Accounts", !!(p.lichess || p.chesscom), "home"], ["3", "Load games", nG > 0, "games"], ["4", "Statistics", nG > 0, "report"], ["5", "Strengths & weak points", nG > 0, "report"], ["6", "Training", Object.keys(p.practice || {}).length > 0, "training"]];
+  v.innerHTML = `<div class="card"><h2>Step by step</h2><div class="steps">${stepsDef.map(([n, l, d, t]) => `<div class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${n}</div>${l}</div>`).join("")}
+    <div class="step" data-go="test"><div class="n">→</div>Test & player profile</div></div>
+    ${!(p.lichess || p.chesscom) ? `<p class="small" style="margin-top:8px">Fill in your Lichess and/or Chess.com username under <b>Profile</b> below.</p>` : ""}</div>
+  <div class="card"><h2>${esc(p.name)}</h2>
     <div class="stats">
       <div class="stat"><div class="v">${Object.keys(p.games).length}</div><div class="l">games analysed</div></div>
       <div class="stat"><div class="v">${last ? last.summary.scorePct + "%" : "–"}</div><div class="l">score in analysed games</div></div>
@@ -115,92 +135,111 @@ let running = null;
 function games(v) {
   const p = P();
   const list = Object.values(p.games).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  v.innerHTML = `<div class="card"><h2>Import & analyse games</h2>
+  v.innerHTML = `<div class="card"><h2>Load & analyse games</h2>
     <div class="form">
-      <label class="f">Source<select id="src"><option value="lichess">Lichess (${esc(p.lichess || "username?")})</option><option value="chesscom">Chess.com (${esc(p.chesscom || "username?")})</option><option value="pgn">PGN (paste or file)</option></select></label>
-      <label class="f">Number of games<input id="num" type="number" value="20" min="1" max="100"></label>
-      <label class="f">Time controls<select id="perf"><option value="rapid,classical">Rapid + classical</option><option value="blitz,rapid,classical">Blitz + rapid + classical</option><option value="blitz">Blitz only</option><option value="all">All</option></select></label>
+      <label class="f">Sources<span class="row" style="gap:12px;color:var(--ink)"><label class="row small"><input type="checkbox" id="srcL" ${p.lichess ? "checked" : "disabled"}> Lichess${p.lichess ? ` (${esc(p.lichess)})` : ""}</label><label class="row small"><input type="checkbox" id="srcC" ${p.chesscom ? "checked" : "disabled"}> Chess.com${p.chesscom ? ` (${esc(p.chesscom)})` : ""}</label><label class="row small"><input type="checkbox" id="srcP" ${!p.lichess && !p.chesscom ? "checked" : ""}> PGN</label></span></label>
+      <label class="f">Period<select id="months"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></label>
+      <label class="f">Time control at least<select id="mintc"><option value="300">5+0</option><option value="600" selected>10+0</option><option value="1300">15+10</option><option value="1800">30+0</option></select></label>
+      <label class="f">Max. number of games<input id="num" type="number" value="100" min="1" max="500"></label>
       <label class="f">Depth<select id="speed"><option value="80">Fast (≈7 s/game)</option><option value="150" selected>Normal (≈12 s/game)</option><option value="400">Deep (≈30 s/game)</option></select></label>
     </div>
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
-    <div class="row" style="margin-top:12px"><button class="btn" id="go">Analyse</button><button class="btn secondary hidden" id="stop">Stop</button></div>
+    <label class="row small" style="margin-top:10px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for the style statistics on games from before this update)</label>
+    <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button><button class="btn secondary hidden" id="stop">Stop</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
-    <p class="muted small">Already-analysed games are skipped. Lichess games that already have a computer analysis are processed much faster.</p></div>
+    <p class="small muted">"Time control at least 10+0" counts a game as base time + 40 × increment, so 8+2 also qualifies. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster.</p></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Opening</th></tr>
     ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
       const e = (l) => g.errors.filter((x) => x.label === l).length;
       return `<tr><td>${esc(g.date)}</td><td>${g.site && g.site.startsWith("http") ? `<a href="${esc(g.site)}" target="_blank" rel="noopener">${esc(opp)}</a>` : esc(opp)} <span class="muted small">${esc(g.opponentElo || "")}</span></td><td>${g.color === "w" ? "White" : "Black"}</td><td>${res}</td><td>${g.accuracy ?? "–"}</td><td><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></td><td class="small">${esc(g.opening)}</td></tr>`; }).join("")}</table></div>
     <div class="row" style="margin-top:10px"><button class="btn secondary" id="clearG">Delete all games</button></div>` : `<p class="muted">No games yet.</p>`}</div>`;
-  const src = $("#src");
-  src.onchange = () => $("#pgnBox").classList.toggle("hidden", src.value !== "pgn");
-  if (!p.lichess && p.chesscom) src.value = "chesscom";
-  if (!p.lichess && !p.chesscom) src.value = "pgn";
-  src.onchange();
+  const srcP = $("#srcP");
+  srcP.onchange = () => $("#pgnBox").classList.toggle("hidden", !srcP.checked);
+  srcP.onchange();
   $("#pgnFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#pgnText").value = await f.text(); };
   $("#go").onclick = () => runImport(v);
   $("#stop").onclick = () => { if (running) running.stop = true; };
   if ($("#clearG")) $("#clearG").onclick = () => { if (confirm("Delete all analysed games for this player? (Puzzles and log are kept.)")) { p.games = {}; save(); go("games"); } };
 }
 
-async function fetchGames(p, src, num, perf) {
-  if (src === "lichess") {
-    if (!p.lichess) throw new Error("Fill in a Lichess username on Home.");
-    const q = new URLSearchParams({ max: num, clocks: "true", evals: "true", opening: "true" });
-    if (perf !== "all") q.set("perfType", perf);
+const tcEstimate = (tc) => { const m = /^(\d+)(?:\+(\d+))?$/.exec(tc || ""); return m ? +m[1] + 40 * +(m[2] || 0) : null; };
+async function fetchGames(p, opts, status) {
+  const out = [];
+  const since = Date.now() - opts.months * 30.4 * 86400000;
+  if (opts.lichess && p.lichess) {
+    status("Fetching games from Lichess…");
+    const q = new URLSearchParams({ max: opts.num * 2, since: Math.floor(since), clocks: "true", evals: "true", opening: "true", perfType: opts.mintc >= 600 ? "rapid,classical,correspondence" : "blitz,rapid,classical" });
     const r = await fetch(`https://lichess.org/api/games/user/${encodeURIComponent(p.lichess)}?${q}`, { headers: { Accept: "application/x-chess-pgn" } });
     if (!r.ok) throw new Error(`Lichess answered ${r.status}. Is the username correct?`);
-    return { pgns: splitPgn(await r.text()), name: p.lichess };
+    for (const pgn of splitPgn(await r.text())) {
+      const tc = (/\[TimeControl "([^"]+)"/.exec(pgn) || [])[1];
+      const est = tcEstimate(tc); if (est === null || est < opts.mintc) continue;
+      out.push({ pgn, name: p.lichess, src: "lichess" });
+    }
   }
-  if (src === "chesscom") {
-    if (!p.chesscom) throw new Error("Fill in a Chess.com username on Home.");
+  if (opts.chesscom && p.chesscom) {
+    status("Fetching games from Chess.com…");
     const u = p.chesscom.toLowerCase();
     const r = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(u)}/games/archives`);
     if (!r.ok) throw new Error(`Chess.com answered ${r.status}. Is the username correct?`);
-    const arch = (await r.json()).archives || [];
-    const allowed = perf === "all" ? null : perf.split(",").map((x) => (x === "classical" ? "daily" : x)).concat(perf.includes("classical") ? ["classical"] : []);
-    const out = [];
-    for (let i = arch.length - 1; i >= 0 && out.length < num; i--) {
+    const sinceD = new Date(since); const cut = sinceD.getFullYear() * 12 + sinceD.getMonth();
+    const arch = ((await r.json()).archives || []).filter((a) => { const m = /(\d{4})\/(\d{2})$/.exec(a); return m && +m[1] * 12 + (+m[2] - 1) >= cut; });
+    for (let i = arch.length - 1; i >= 0; i--) {
+      status(`Fetching games from Chess.com… (${arch[i].slice(-7)})`);
       const m = await (await fetch(arch[i])).json();
       for (const g of (m.games || []).reverse()) {
-        if (g.rules !== "chess" || !g.pgn) continue;
-        if (allowed && !allowed.includes(g.time_class)) continue;
-        out.push(g.pgn); if (out.length >= num) break;
+        if (g.rules !== "chess" || !g.pgn || g.time_class === "daily") continue;
+        if ((g.end_time || 0) * 1000 < since) continue;
+        const est = tcEstimate(g.time_control); if (est === null || est < opts.mintc) continue;
+        out.push({ pgn: g.pgn, name: p.chesscom, src: "chess.com" });
       }
     }
-    return { pgns: out, name: p.chesscom };
   }
-  const text = $("#pgnText").value;
-  const pgns = splitPgn(text);
-  let name = $("#pgnName").value.trim();
-  if (!name && pgns.length) { const c = {}; for (const x of pgns) for (const t of ["White", "Black"]) { const m = new RegExp(`\\[${t} "([^"]+)"`).exec(x); if (m) c[m[1]] = (c[m[1]] || 0) + 1; } name = Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || ""; }
-  if (name) { p.pgnName = name; save(); }
-  return { pgns: pgns.slice(0, num), name };
+  if (opts.pgn) {
+    const pgns = splitPgn($("#pgnText").value);
+    let name = $("#pgnName").value.trim();
+    if (!name && pgns.length) { const c = {}; for (const x of pgns) for (const t of ["White", "Black"]) { const m = new RegExp(`\\[${t} "([^"]+)"`).exec(x); if (m) c[m[1]] = (c[m[1]] || 0) + 1; } name = Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || ""; }
+    if (name) { p.pgnName = name; save(); }
+    for (const pgn of pgns) out.push({ pgn, name, src: "pgn" });
+  }
+  // newest first, capped
+  const dateOf = (x) => ((/\[UTCDate "([^"]+)"/.exec(x.pgn) || /\[Date "([^"]+)"/.exec(x.pgn) || [])[1] || "");
+  out.sort((a, b) => dateOf(b).localeCompare(dateOf(a)));
+  return out.slice(0, opts.num);
 }
 
 async function runImport(v) {
   const p = P();
-  const src = $("#src").value, num = +$("#num").value || 20, perf = $("#perf").value, movetime = +$("#speed").value;
+  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, mintc: +$("#mintc").value, num: +$("#num").value || 100 };
+  const movetime = +$("#speed").value;
+  const re = $("#reanalyse").checked;
+  const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.pgn && "PGN"].filter(Boolean).join(" + ");
   const prog = $("#prog"), txt = $("#progText"), bar = $("#progBar");
   prog.classList.remove("hidden"); $("#go").disabled = true; $("#stop").classList.remove("hidden");
   running = { stop: false };
   try {
-    txt.textContent = "Fetching games…";
-    const { pgns, name } = await fetchGames(p, src, num, perf);
-    if (!pgns.length) throw new Error("No games found.");
+    if (!opts.lichess && !opts.chesscom && !opts.pgn) throw new Error("Choose at least one source.");
+    const list = await fetchGames(p, opts, (t) => (txt.textContent = t));
+    if (!list.length) throw new Error("No games found for this period and time control.");
+    const todo = list.filter((x) => { const l = (/\[Link "([^"]+)"/.exec(x.pgn) || [])[1]; const s2 = (/\[Site "([^"]+)"/.exec(x.pgn) || [])[1]; const id = l || (s2 && s2.startsWith("http") ? s2 : null); return re || !(id && p.games[id]); }).length;
+    txt.textContent = `${list.length} games found (${todo} new). Estimated time: ~${Math.max(1, Math.round(todo * movetime / 150 * 12 / 60))} min.`;
+    await new Promise((r) => setTimeout(r, 1200));
+    const pgns = list.map((x) => x.pgn);
     txt.textContent = "Starting Stockfish…";
     const eng = getEngine(); await eng.ready;
     let done = 0, added = 0, skipped = 0;
-    for (const pgn of pgns) {
+    for (const [gi, pgn] of pgns.entries()) {
       if (running.stop) break;
+      const name = list[gi].name;
       const site = (/\[Site "([^"]+)"/.exec(pgn) || [])[1];
       const link = (/\[Link "([^"]+)"/.exec(pgn) || [])[1];
       const gid = link || (site && site.startsWith("http") ? site : null);
-      if (gid && p.games[gid]) { done++; skipped++; continue; }
+      if (gid && p.games[gid] && !re) { done++; skipped++; continue; }
       let r;
       try {
         r = await analyseGame(eng, pgn, name, { movetime }, (k, n) => {
-          txt.textContent = `Game ${done + 1} of ${pgns.length}: position ${k}/${n}`;
+          txt.textContent = `Game ${done + 1} of ${pgns.length} (${list[gi].src}): position ${k}/${n}`;
           bar.style.width = (100 * (done + k / n) / pgns.length).toFixed(1) + "%";
         });
       } catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
@@ -212,10 +251,10 @@ async function runImport(v) {
     }
     txt.textContent = `Done: ${added} new games analysed${skipped ? `, ${skipped} skipped (already done, too short, or the name doesn't match)` : ""}.`;
     if (added) { buildReport(p); logEvent("analysis", `${added} games analysed (${src}). Total ${Object.keys(p.games).length}.`); toast("Analysis done. See Report."); setTimeout(() => go("report"), 900); }
-    else if (skipped && !added) txt.textContent += ` Check that "${name}" is the exact name in the games.`;
+    else if (skipped && !added) txt.textContent += " All games were already analysed, or the name didn't match.";
   } catch (e) {
     console.error(e);
-    txt.innerHTML = `<span style="color:var(--bad)">${esc(e.message || e)}</span>${src !== "pgn" ? " · If downloading doesn't work, export the PGN from the website and paste it under 'PGN'." : ""}`;
+    txt.innerHTML = `<span style="color:var(--bad)">${esc(e.message || e)}</span> · If downloading doesn't work, export the PGN from the website and paste it under 'PGN'.`;
   } finally { $("#go").disabled = false; $("#stop").classList.add("hidden"); running = null; }
 }
 
@@ -265,9 +304,12 @@ function report(v) {
     ${Object.entries(A.endgames).map(([t, e]) => `<tr><td>${esc(t)}</td><td>${e.games}</td><td>${e.scorePct}%</td><td>${e.acc}</td></tr>`).join("") || "<tr><td colspan=4 class='muted'>No endgames reached yet</td></tr>"}</table></div>
   ${hist.length > 1 ? `<div class="card"><h2>Progress</h2><div class="scroll"><table><tr><th>Date</th><th>Games</th><th>Score</th><th>Opening</th><th>Middlegame</th><th>Endgame</th><th>Top error</th></tr>
     ${hist.map((h) => `<tr><td>${h.date}</td><td>${h.summary.games}</td><td>${h.summary.scorePct}%</td>${["opening", "middlegame", "endgame"].map((x) => `<td>${h.summary.phaseAcc[x] ?? "–"} / ${h.summary.per100[x] ?? "–"}</td>`).join("")}<td class="small">${esc(h.summary.topTags[0] || "")}</td></tr>`).join("")}</table></div><p class="small muted">Per phase: accuracy / errors per 100 moves.</p></div>` : ""}
+  <div class="card"><h2>Next</h2><div class="row"><button class="btn" id="toTrain">6. Start training</button><button class="btn secondary" id="toProfile">Your style & player profile</button></div></div>
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
   bindRepertoire(v, p);
   $("#copyRep").onclick = () => copy(claudeSummary(p, A, D));
+  $("#toTrain").onclick = () => go("training");
+  $("#toProfile").onclick = () => go("profile");
 }
 function repertoireHtml(p, A) {
   const r = p.repertoire;
@@ -304,6 +346,46 @@ function claudeSummary(p, A, D) {
     `Biggest mistakes (FEN · played · best):\n${A.critical.slice(0, 5).map((e) => `- ${e.fen} · ${e.played} · ${e.best} (${e.bestLine})`).join("\n")}`;
 }
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { prompt("Copy this text:", text); } }
+
+// ------------------------------------------------------------------ TRAINING (step 6)
+const MODULE_MAP = {
+  "missed tactic / forcing move": ["Attack & mate", "Sacrifice", "Calculation"],
+  "hung material / allowed tactic": ["Defence", "Quiet moves"],
+  "allowed mate": ["Defence", "kingsafety"],
+  "positional / planning": ["coordination", "prophylaxis", "space", "structure"],
+  "endgame technique": ["Endgame", "technique"],
+  "threw away winning position": ["technique", "prophylaxis"],
+  "missed mate": ["Attack & mate"],
+};
+const MOD_LABEL = (c) => POS_GROUPS[c] || c;
+function training(v) {
+  const p = P();
+  const gs = Object.values(p.games);
+  const A = gs.length ? aggregate(gs) : null, D = A ? diagnose(A, p) : null;
+  const rec = [];
+  if (A) {
+    for (const t of Object.keys(A.tags)) for (const m of MODULE_MAP[t] || []) if (!rec.includes(m)) rec.push(m);
+    const worst = Object.keys(A.seriousPer100).sort((a, b) => A.seriousPer100[b] - A.seriousPer100[a])[0];
+    if (worst === "endgame" && !rec.includes("Endgame")) rec.unshift("Endgame");
+  }
+  const lastTest = (p.tests || []).filter((t) => t.done).slice(-1)[0];
+  if (lastTest?.result) Object.entries(lastTest.result.cats).sort((a, b) => a[1].rating - b[1].rating).slice(0, 3).forEach(([c]) => { if (!rec.includes(c)) rec.unshift(c); });
+  const all = TAC_CATS.concat(Object.keys(POS_GROUPS));
+  const prog = (c) => { const x = (p.practice || {})[c]; return x ? `${x.solved}/${x.n} solved · level ≈ ${Math.round(x.est)}` : "not started yet"; };
+  const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
+  v.innerHTML = `<div class="card"><h2>Your training</h2>
+    <p class="small">Based on ${A ? `your ${A.games} analysed games` : "your profile"}${lastTest ? " and your last test" : ""}. Start with the modules at the top: they target your weak points.</p>
+    <h3>Recommended modules</h3>${rec.length ? rec.slice(0, 6).map((c, i) => `<div class="list-item ${i < 3 ? "weak" : ""}"><div class="row" style="justify-content:space-between"><span><b>${esc(MOD_LABEL(c))}</b> <span class="small muted">${prog(c)}</span></span><button class="btn small" data-prac="${esc(c)}">Train</button></div></div>`).join("") : `<p class="muted small">Analyse games or take the test first.</p>`}
+    <h3>Daily routine (${p.hours} h/week)</h3><ol class="small">
+      <li><b>Puzzles from your own games</b>: ${duePz} due today. <a href="#" data-go="puzzles">Go</a></li>
+      <li><b>Module of the day</b>: 10 positions from the first recommended module, with the Think sheet for each position.</li>
+      <li><b>Endgames</b>: 1 theory position to play out. <a href="#" data-go="endgames">Go</a></li>
+      <li><b>Serious games</b> (15+10 or slower): afterwards, load them on the Games tab and check your mistakes.</li></ol>
+    ${D ? `<h3>Weekly schedule</h3>${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week</b><span class="small">${esc(w.how)}</span></div>`).join("")}` : ""}</div>
+    <div class="card"><h2>All modules</h2><div class="scroll"><table>${all.map((c) => `<tr><td>${esc(MOD_LABEL(c))}</td><td class="small muted">${TAC_CATS.includes(c) ? "tactical" : "positional"}</td><td class="small">${prog(c)}</td><td><button class="btn secondary small" data-prac="${esc(c)}">Train</button></td></tr>`).join("")}</table></div></div>`;
+  v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => go("practice", { cat: b.dataset.prac })));
+  v.querySelectorAll("[data-go]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); go(a.dataset.go); }));
+}
 
 // ------------------------------------------------------------------ PUZZLES
 function puzzles(v) {

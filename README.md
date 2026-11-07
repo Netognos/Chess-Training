@@ -12,6 +12,14 @@ A personal chess trainer that runs entirely in your browser: on your laptop or y
 - **How to evaluate**: a short guide to judging who is better and why, in the Board and Notebook tabs.
 - **Log**: everything you do is logged per player, along with your next steps and repertoire notes. You can export it as Markdown, and back up or restore everything as JSON.
 
+**Part 2: Test & profile**
+- **Position test** (quick: 12 positions, full: 32): adaptive to your level. You play your move, write down *why* and which line you calculated. It measures your score per category, your calculation depth (how many moves of the solution you find), your time, and the character of your moves.
+  - Tactical positions: Lichess puzzle database (CC0), rated 600-3000, categorised by Chess Coach into attack & mate, defence, calculation, sacrifice, quiet move and endgame.
+  - Positional positions: [neilgd/chess-position-analysis-results](https://github.com/neilgd/chess-position-analysis-results) (MIT): 2,204 positional puzzles selected and classified by WIM/FM Liwia Jarocka, WGM Michalina Rudzińska and WGM Margarita Voyska.
+  - The approach follows IM Igor Khmelnitsky's *Chess Exam and Training Guide* (a rating per category instead of one overall number).
+- **Player profile**: your player type following GM Lars Bo Hansen's model (activist, reflector, pragmatist, theoretician; as described by GM Karsten Müller and GM Luis Engel), based on the test, a questionnaire and the style statistics from your games (sacrifices, opposite-side castling, accuracy when ahead/equal/behind, …). It also shows the openings you play now, the ones you score worst against, the openings that fit your type, and your work points.
+- **Training modules**: practise per category at your level.
+
 Multiple players are supported: each one has their own profile, analysis, puzzles and log.
 
 ## Put it online with GitHub Pages (5 minutes)
@@ -58,6 +66,8 @@ python -m http.server 8000
 | `app.js` | UI: tabs, storage, training flows |
 | `analysis.js` | PGN → per-game analysis → player profile |
 | `coach.js` | Diagnosis, strengths/weak points, training plan |
+| `test.js` | Test, results, player profile, training modules |
+| `testbank.js` | Test positions (tactical + positional) |
 | `reader.js` | "Read the position": rule-based position breakdown |
 | `engine.js` | Stockfish (UCI) wrapper |
 | `board.js` | Chessboard (tap or drag) |

@@ -15,6 +15,7 @@ select, input, textarea, button { font: inherit; color: inherit; }
 select, input, textarea { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
 textarea { width: 100%; min-height: 110px; }
 nav { display: flex; gap: 4px; overflow-x: auto; padding: 8px 10px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 51px; z-index: 4; }
+.sections { position: sticky; top: 51px; z-index: 4; } nav { top: 95px; }
 nav button { border: 0; background: transparent; padding: 7px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; color: var(--muted); }
 nav button.active { background: var(--accent); color: var(--accent-ink); }
 main { max-width: 1100px; margin: 0 auto; padding: 14px; }
@@ -55,7 +56,7 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
 .two { display: grid; grid-template-columns: minmax(280px, 480px) 1fr; gap: 16px; align-items: start; }
-@media (max-width: 760px) { .two { grid-template-columns: 1fr; } nav { top: 49px; } }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } .sections { top: 49px; } nav { top: 93px; } }
 .feedback { padding: 10px 12px; border-radius: 10px; margin: 10px 0; }
 .feedback.ok { background: #e6f4e7; color: #1e5a22; }
 .feedback.no { background: #fde7e5; color: #8c1d18; }
@@ -84,3 +85,12 @@ a { color: var(--accent); }
 .board .promo button { flex: 1; background: transparent; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
 .board .promo img { width: 100%; }
 img.ghost { position: fixed; pointer-events: none; z-index: 100; }
+
+.sections { display: flex; gap: 6px; padding: 8px 10px 0; background: var(--card); }
+.sections button { flex: 1; border: 1px solid var(--line); background: transparent; padding: 8px; border-radius: 10px; cursor: pointer; font-weight: 600; color: var(--muted); }
+.sections button.active { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.step { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+.step.done { border-color: var(--good); }
+.step .n { font-weight: 700; color: var(--accent); }
+.step.done .n::after { content: " ✓"; color: var(--good); }

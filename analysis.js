@@ -10,6 +10,12 @@ export function splitPgn(text) {
   return t.split(/\n\s*\n(?=\[Event )/).map((s) => s.trim()).filter((s) => s.includes("["));
 }
 
+function materialFor(fen, color) {
+  let s = 0; for (const c of fen.split(" ")[0]) { const p = c.toLowerCase(); if (VAL[p] === undefined) continue; s += (c === p ? -1 : 1) * VAL[p] * (color === "w" ? 1 : -1); }
+  return s;
+}
+function kingSquare(fen, color) { const c = new Chess(fen); for (const row of c.board()) for (const p of row) if (p && p.type === "k" && p.color === color) return p.square; return null; }
+const sqDist = (a, b) => Math.max(Math.abs(a.charCodeAt(0) - b.charCodeAt(0)), Math.abs(+a[1] - +b[1]));
 function pieceList(fen) { return fen.split(" ")[0].replace(/[\d/]/g, ""); }
 export function nonPawnMaterial(fen) { let s = 0; for (const c of pieceList(fen)) { const p = c.toLowerCase(); if (p !== "p" && p !== "k") s += VAL[p]; } return s; }
 export function phaseOf(fen, ply) { if (nonPawnMaterial(fen) <= 26) return "endgame"; return ply < 20 ? "opening" : "middlegame"; }
@@ -114,6 +120,16 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   const phaseAcc = { opening: [], middlegame: [], endgame: [] };
   const errors = [];
   let maxWp = 0, minWp = 100, firstEnd = null, wpAfterOpening = null;
+  const st = { moves: 0, checks: 0, captures: 0, advances: 0, kingZone: 0, sacSound: 0, sacUnsound: 0, storm: 0, acc: { ahead: [], equal: [], behind: [] } };
+  const castle = {};
+  let queensOffPly = null;
+  for (let i = 0; i < g.moves.length; i++) {
+    const m = g.moves[i];
+    if (m.flags.includes("k")) castle[m.color] = "k"; else if (m.flags.includes("q")) castle[m.color] = "q";
+    if (queensOffPly === null && !/q/i.test(g.fens[i + 1].split(" ")[0])) queensOffPly = i + 1;
+  }
+  const opp = color === "w" ? "b" : "w";
+  const oppCastle = castle.w && castle.b && castle.w !== castle.b;
   for (let i = 0; i < g.moves.length; i++) {
     const fen = g.fens[i];
     const ph = phaseOf(fen, i);
@@ -122,7 +138,24 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     const cpB = sign * evals[i].cp, cpA = sign * evals[i + 1].cp;
     const wpB = winPct(cpB), wpA = winPct(cpA);
     if (i >= 20) { maxWp = Math.max(maxWp, wpA); minWp = Math.min(minWp, wpA); if (wpAfterOpening === null) wpAfterOpening = wpB; }
-    phaseAcc[ph].push(moveAccuracy(wpB, wpA));
+    const macc = moveAccuracy(wpB, wpA);
+    phaseAcc[ph].push(macc);
+    { // style metrics
+      const m = g.moves[i];
+      st.moves++;
+      if (m.san.includes("+") || m.san.includes("#")) st.checks++;
+      if (m.captured) st.captures++;
+      if (m.piece === "p" && (color === "w" ? +m.to[1] >= 5 : +m.to[1] <= 4)) st.advances++;
+      const ek = kingSquare(fen, opp);
+      if (ek && sqDist(m.to, ek) <= 2 && m.piece !== "k") st.kingZone++;
+      if (oppCastle && m.piece === "p") { const ekf = castle[opp] === "k" ? "fgh" : "abc"; if (ekf.includes(m.to[0])) st.storm++; }
+      if (i + 2 < g.fens.length) {
+        const lost = materialFor(fen, color) - materialFor(g.fens[i + 2], color);
+        const lost2 = i + 4 < g.fens.length ? materialFor(fen, color) - materialFor(g.fens[i + 4], color) : lost;
+        if (lost >= 2 && lost2 >= 2 && !g.moves[i].promotion) { if (wpB - wpA < 5) st.sacSound++; else if (wpB - wpA >= 10) st.sacUnsound++; }
+      }
+      st.acc[cpB >= 150 ? "ahead" : cpB <= -150 ? "behind" : "equal"].push(macc);
+    }
     const drop = wpB - wpA, label = classify(drop);
     if (!label) continue;
     const mv = g.moves[i];
@@ -148,7 +181,12 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
       drop: +drop.toFixed(1), tags, clock: clk,
     });
   }
-  let opening = H.Opening && H.Opening !== "?" ? H.Opening : g.moves.slice(0, 6).map((m) => m.san).join(" ");
+  let opening = H.Opening && H.Opening !== "?" ? H.Opening : null;
+  if (!opening && H.ECOUrl) { // chess.com: https://www.chess.com/openings/Caro-Kann-Defense-Advance-Variation-3...c5
+    const slug = decodeURIComponent(H.ECOUrl.split("/").pop() || "").replace(/-\d+\..*$/, "").replace(/-/g, " ").trim();
+    if (slug) opening = slug.replace(/\bDefense\b/, "Defense").replace(/\s+/g, " ");
+  }
+  if (!opening) opening = g.moves.slice(0, 6).map((m) => m.san).join(" ");
   const all = Object.values(phaseAcc).flat();
   const avg = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : null);
   return {
@@ -161,6 +199,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),
     maxWp: +maxWp.toFixed(1), minWp: +minWp.toFixed(1), endgame: firstEnd, errors,
+    style: { ...st, acc: Object.fromEntries(Object.entries(st.acc).map(([k, v]) => [k, { n: v.length, sum: +v.reduce((a, b) => a + b, 0).toFixed(1) }])), oppCastle: !!oppCastle, queensOffPly, castled: castle[color] || null },
   };
 }
 
@@ -192,5 +231,26 @@ export function aggregate(games) {
   A.resilience = { lost: lose.length, saved: lose.filter((g) => (g.score ?? 0) >= 0.5).length };
   A.lostOnTime = games.filter((g) => g.score === 0 && /time/i.test(g.termination)).length;
   A.critical = serious.filter((e) => e.best).sort((a, b) => b.drop - a.drop).slice(0, 30);
+  const sg = games.filter((g) => g.style);
+  if (sg.length) {
+    const T = { moves: 0, checks: 0, captures: 0, advances: 0, kingZone: 0, sacSound: 0, sacUnsound: 0, storm: 0 };
+    const acc = { ahead: { n: 0, sum: 0 }, equal: { n: 0, sum: 0 }, behind: { n: 0, sum: 0 } };
+    for (const g of sg) { for (const k in T) T[k] += g.style[k] || 0; for (const k in acc) { acc[k].n += g.style.acc[k].n; acc[k].sum += g.style.acc[k].sum; } }
+    const per = (k) => +(100 * T[k] / Math.max(1, T.moves)).toFixed(1);
+    A.style = {
+      games: sg.length, checksPct: per("checks"), capturesPct: per("captures"), advancesPct: per("advances"), kingZonePct: per("kingZone"),
+      sacSound: T.sacSound, sacUnsound: T.sacUnsound, sacPer10: +(10 * (T.sacSound + T.sacUnsound) / sg.length).toFixed(1),
+      oppCastlePct: +(100 * sg.filter((g) => g.style.oppCastle).length / sg.length).toFixed(0),
+      earlyQueenTradePct: +(100 * sg.filter((g) => g.style.queensOffPly !== null && g.style.queensOffPly <= 40).length / sg.length).toFixed(0),
+      stormPerGame: +(T.storm / sg.length).toFixed(1),
+      acc: Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, v.n ? +(v.sum / v.n).toFixed(1) : null])), accN: Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, v.n])),
+      avgLength: Math.round(sg.reduce((a, g) => a + g.plies, 0) / sg.length / 2),
+    };
+    // aggression index 0-100 (rough): weighted mix of attacking indicators
+    const S = A.style;
+    S.aggression = Math.max(0, Math.min(100, Math.round(10 + S.kingZonePct * 1.5 + S.checksPct * 1.5 + S.sacPer10 * 3 + S.oppCastlePct * 0.3 + S.stormPerGame * 4 - S.earlyQueenTradePct * 0.4)));
+  }
+  // openings faced: per colour, worst results (min 2 games)
+  A.hardest = A.openings.filter((o) => o.games >= 2).sort((a, b) => a.scorePct - b.scorePct || (a.wpAfter10 ?? 50) - (b.wpAfter10 ?? 50)).slice(0, 5);
   return A;
 }
