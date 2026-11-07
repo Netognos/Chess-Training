@@ -7,6 +7,9 @@ A personal chess trainer that runs entirely in your browser: on your laptop or y
 - **Puzzles**: your own biggest mistakes come back as puzzles, with spaced repetition (1, 3, 7, 21 and 60 days).
 - **Endgames**: the theory positions you need to know (basic mates, square rule, opposition, Lucena, Philidor, K+B+N), played out against the engine. You can add your own positions.
 - **Board**: analyse any position with the top 3 engine lines, play on against the engine, or copy the position as a "what's the plan here?" question for Claude.
+- **Read the position**: a breakdown of any position without the engine (material and imbalances, loose and hanging pieces, the opponent's threats, your forcing moves, king safety, pawn structure, activity), plus what that means for your plan.
+- **Think sheet**: the 5-question thinking routine and your candidate moves, each with the idea behind it. The engine checks the candidates only when you ask. Save it all to the **Notebook**.
+- **How to evaluate**: a short guide to judging who is better and why, in the Board and Notebook tabs.
 - **Log**: everything you do is logged per player, along with your next steps and repertoire notes. You can export it as Markdown, and back up or restore everything as JSON.
 
 Multiple players are supported: each one has their own profile, analysis, puzzles and log.
@@ -55,6 +58,7 @@ python -m http.server 8000
 | `app.js` | UI: tabs, storage, training flows |
 | `analysis.js` | PGN → per-game analysis → player profile |
 | `coach.js` | Diagnosis, strengths/weak points, training plan |
+| `reader.js` | "Read the position": rule-based position breakdown |
 | `engine.js` | Stockfish (UCI) wrapper |
 | `board.js` | Chessboard (tap or drag) |
 | `data.js` | Endgame positions, training advice, starter repertoires |

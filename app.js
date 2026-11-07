@@ -4,6 +4,7 @@ import { Board } from "./board.js";
 import { splitPgn, analyseGame, aggregate, pvToSan, parseGame } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
+import { readPosition } from "./reader.js";
 
 // ------------------------------------------------------------------ state
 const KEY = "chesscoach.v1";
@@ -30,13 +31,13 @@ function logEvent(type, text) { const p = P(); if (!p) return; p.log.unshift({ d
 function newPlayer(d) {
   const id = "p" + Date.now().toString(36);
   S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4,
-    createdAt: today(), games: {}, reports: [], puzzles: {}, endgames: {}, customEndgames: [], log: [], nextSteps: [], repertoire: { white: "", vsE4: "", vsD4: "", notes: "" }, settings: { movetime: 150 } };
+    createdAt: today(), games: {}, reports: [], puzzles: {}, endgames: {}, customEndgames: [], notebook: [], log: [], nextSteps: [], repertoire: { white: "", vsE4: "", vsD4: "", notes: "" }, settings: { movetime: 150 } };
   S.current = id; save(); return id;
 }
 function srs(item, ok) { item.attempts = (item.attempts || 0) + 1; if (ok) { item.successes = (item.successes || 0) + 1; item.box = Math.min((item.box || 0) + 1, 5); } else item.box = 1; item.due = addDays(INTERVALS[item.box]); item.last = today(); item.lastOk = ok; }
 
 // ------------------------------------------------------------------ routing
-const views = { home, games, report, puzzles, endgames, board, log };
+const views = { home, games, report, puzzles, endgames, board, notebook, log };
 let tab = "home";
 function go(t, arg) {
   tab = t;
@@ -66,6 +67,7 @@ function home(v) {
       <li><b>Puzzles</b>: your own mistakes as puzzles, repeated at spaced intervals.</li>
       <li><b>Endgames</b>: theory positions to know, played out against the engine.</li>
       <li><b>Board</b>: analyse any position, play on against the engine, or copy it to ask Claude about the plan.</li>
+      <li><b>Notebook</b>: your own thoughts and candidate moves per position, checked by the engine.</li>
       <li><b>Log</b>: what you've done and the next steps, plus backup and export.</li></ol></div>`;
     $("#create").onclick = () => { const d = readProfile(v); if (!d.name) return toast("Fill in a name"); newPlayer(d); logEvent("profile", "Player created"); go("home"); };
     return;
@@ -310,7 +312,9 @@ function puzzles(v) {
   const due = all.filter((x) => !x.due || x.due <= today()).sort((a, b) => (a.box || 0) - (b.box || 0) || b.drop - a.drop);
   if (!all.length) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>Analyse games first: your biggest mistakes become puzzles here.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   const known = all.filter((x) => (x.box || 0) >= 4).length;
-  v.innerHTML = `<div class="two"><div><div id="pb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div></div>
+  v.innerHTML = `<div class="two"><div><div id="pb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
+    <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button></div>
+    <div class="card hidden" id="pReadOut" style="margin-top:12px"></div><div class="card hidden" id="pSheetOut" style="margin-top:12px"></div></div>
     <div><div class="card"><h2>Your mistakes as puzzles</h2><div class="small muted">${due.length} due · ${all.length} total · ${known} known</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
     <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
   const brd = new Board($("#pb"), { orientation: "w" });
@@ -320,7 +324,8 @@ function puzzles(v) {
     if (!cur) { $("#pinfo").innerHTML = `<div class="feedback ok">No more puzzles due today. Well done! Come back tomorrow, or practise endgames.</div>`; brd.locked = true; return; }
     brd.locked = false; brd.setFen(cur.fen); brd.setOrientation(cur.fen.split(" ")[1]);
     const side = cur.fen.split(" ")[1] === "w" ? "White" : "Black";
-    $("#pinfo").innerHTML = `<b>Move ${cur.moveNo}, you're ${side}</b> (${esc(cur.phase)}). Eval before your move: ${cur.evalBefore > 0 ? "+" : ""}${cur.evalBefore}.<br><span class="small muted">In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}. Find a better move.</span>`;
+    $("#pinfo").innerHTML = `<b>Move ${cur.moveNo}, you're ${side}</b> (${esc(cur.phase)}). Eval before your move: ${cur.evalBefore > 0 ? "+" : ""}${cur.evalBefore}.<br><span class="small muted">${cur.played === "?" ? "Your own position: find the best move." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}. Find a better move.`}</span>`;
+    $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden");
   };
   brd.onMove = async (mv, before) => {
     if (!cur || solved) return;
@@ -343,6 +348,8 @@ function puzzles(v) {
   $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
   $("#explore").onclick = () => cur && go("board", { fen: cur.fen });
   $("#next").onclick = () => { idx++; show(); };
+  $("#pRead").onclick = () => { if (!cur) return; const o = $("#pReadOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) o.innerHTML = `<h2>Read the position</h2>` + readerHtml(cur.fen); };
+  $("#pSheet").onclick = () => { if (!cur) return; const o = $("#pSheetOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) thinkSheet(o, () => cur.fen, { source: "puzzle", title: `Puzzle: move ${cur.moveNo}${cur.game ? " (" + cur.game.split("/").pop() + ")" : ""}` }); };
   show();
 }
 function tagHelp(pz) { const t = (pz.tags || []).filter((x) => TAG_ADVICE[x]); return t.length ? `<div class="small" style="margin-top:6px">Type of mistake: ${t.map((x) => `<span class="pill">${esc(x)}</span>`).join("")}<br><span class="muted">${esc(TAG_ADVICE[t[0]].why)}</span></div>` : ""; }
@@ -438,27 +445,36 @@ function endgames(v, arg) {
 
 // ------------------------------------------------------------------ BOARD (analysis)
 function board(v, arg) {
-  const p = P();
+  const p = P(); p.settings ||= {};
   v.innerHTML = `<div class="two"><div><div id="ab"></div>
-    <div class="row" style="margin-top:8px"><button class="btn secondary" id="undo">↶ Undo</button><button class="btn secondary" id="flip">⇅ Flip</button><button class="btn secondary" id="startpos">Start position</button><button class="btn secondary" id="clear">Empty FEN</button></div></div>
+    <div class="row" style="margin-top:8px"><button class="btn secondary" id="undo">↶ Undo</button><button class="btn secondary" id="flip">⇅ Flip</button><button class="btn secondary" id="startpos">Start position</button><button class="btn secondary" id="clear">Empty FEN</button></div>
+</div>
     <div><div class="card"><h2>Analysis</h2>
-      <label class="f">FEN<input id="fen" class="grow"></label><div class="row" style="margin-top:6px"><button class="btn secondary" id="load">Load FEN</button><button class="btn secondary" id="pgnLoad">Load PGN…</button></div>
-      <div class="row" style="margin-top:10px"><label class="row small"><input type="checkbox" id="auto" checked> Engine analysis</label><label class="row small"><input type="checkbox" id="vs"> Engine plays the other side</label></div>
+      <label class="f">FEN<input id="fen"></label><div class="row" style="margin-top:6px"><button class="btn secondary" id="load">Load FEN</button><button class="btn secondary" id="pgnLoad">Load PGN…</button></div>
+      <div class="row" style="margin-top:10px"><label class="row small"><input type="checkbox" id="auto" ${p.settings.autoEngine ? "checked" : ""}> Show engine</label><label class="row small"><input type="checkbox" id="vs"> Engine plays the other side</label></div>
       <div class="lines" id="lines" style="margin-top:8px"></div><div class="small muted" id="moves" style="margin-top:8px"></div></div>
-      <div class="card"><h2>Next</h2><div class="row"><button class="btn secondary" id="claude">Copy for Claude (plan question)</button><button class="btn secondary" id="addEg">Add as endgame drill</button></div>
-      <p class="small muted">"Copy for Claude" copies the position, your moves and the engine lines as a question, ready to paste into a chat with Claude: "what is the plan here and why?"</p></div></div></div>`;
+      <div class="card" id="sheet"></div>
+      <div class="card"><h2>Read the position</h2><p class="small muted">Material, loose pieces, threats, kings, pawns and activity, plus what that means for the plan. Fill in the Think sheet first, then compare.</p>
+      <button class="btn secondary" id="readBtn">Read the position</button><div id="readOut" style="margin-top:8px"></div>${evalGuideHtml()}</div>
+      <div class="card"><h2>Next</h2><div class="row"><button class="btn secondary" id="claude">Copy for Claude (plan question)</button><button class="btn secondary" id="addPz">Add as puzzle</button><button class="btn secondary" id="addEg">Add as endgame drill</button></div>
+      <p class="small muted">"Copy for Claude" copies the position, your moves and the engine lines as a question, ready to paste into a chat with Claude.</p></div></div></div>`;
   const brd = new Board($("#ab"));
   const hist = [];
   let lastLines = [];
   const startFen = arg?.fen || new Chess().fen();
   brd.setFen(startFen); brd.setOrientation(startFen.split(" ")[1]);
+  thinkSheet($("#sheet"), () => brd.fen(), { note: arg?.note || null, source: "board" });
+  let readOpen = false;
+  const drawRead = () => { if (readOpen) $("#readOut").innerHTML = readerHtml(brd.fen()); };
+  $("#readBtn").onclick = () => { readOpen = !readOpen; $("#readBtn").textContent = readOpen ? "Hide reading" : "Read the position"; $("#readOut").innerHTML = readOpen ? readerHtml(brd.fen()) : ""; };
   let token = 0;
   const refresh = async () => {
     $("#fen").value = brd.fen();
     $("#moves").textContent = hist.length ? "Moves: " + hist.map((h) => h.san).join(" ") : "";
     const c = brd.chess;
+    drawRead();
     if (c.isGameOver()) { $("#lines").innerHTML = `<div>${c.isCheckmate() ? "Checkmate" : "Draw"}</div>`; return; }
-    if (!$("#auto").checked) { $("#lines").innerHTML = ""; return; }
+    if (!$("#auto").checked) { $("#lines").innerHTML = `<div class="muted small">Engine hidden. Think first, then tick "Show engine".</div>`; brd.setArrows([]); return; }
     const my = ++token; $("#lines").innerHTML = `<div class="muted">Thinking…</div>`;
     const fen = brd.fen();
     const res = await getEngine().analyse(fen, { movetime: 1200, multipv: 3 });
@@ -482,9 +498,18 @@ function board(v, arg) {
   $("#flip").onclick = () => brd.flip();
   $("#startpos").onclick = () => { hist.length = 0; brd.setFen(new Chess().fen()); refresh(); };
   $("#clear").onclick = () => { $("#fen").value = ""; $("#fen").focus(); };
-  $("#load").onclick = () => { try { const f = $("#fen").value.trim(); new Chess(f); hist.length = 0; brd.setFen(f); refresh(); } catch (e) { toast("Invalid FEN"); } };
+  $("#load").onclick = () => { try { const f = $("#fen").value.trim(); new Chess(f); hist.length = 0; brd.setFen(f); brd.setOrientation(f.split(" ")[1]); refresh(); } catch (e) { toast("Invalid FEN"); } };
   $("#pgnLoad").onclick = () => { const t = prompt("Paste a PGN (one game):"); if (!t) return; try { const g = parseGame(t); hist.length = 0; brd.setFen(g.fens[g.fens.length - 1]); g.moves.forEach((m, i) => hist.push({ san: m.san, before: g.fens[i] })); refresh(); } catch { toast("Couldn't read the PGN"); } };
-  $("#auto").onchange = refresh;
+  $("#auto").onchange = () => { p.settings.autoEngine = $("#auto").checked; save(); refresh(); };
+  $("#addPz").onclick = async () => {
+    const fen = brd.fen(); toast("Engine is looking for the best move…");
+    const [l] = await getEngine().analyse(fen, { movetime: 1500 });
+    if (!l?.pv[0]) return toast("No move found");
+    const m = new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] });
+    const key = "own#" + Date.now().toString(36);
+    p.puzzles[key] = { key, fen, played: "?", best: m.san, bestLine: pvToSan(fen, l.pv, 8), game: "", moveNo: +fen.split(" ")[5], color: fen.split(" ")[1], phase: "own position", tags: [], evalBefore: +(lineToCp(l) / 100).toFixed(2), drop: 0, box: 0, due: today() };
+    save(); logEvent("puzzle", "Own position added as puzzle"); toast("Added under Puzzles");
+  };
   $("#claude").onclick = () => {
     const fen = brd.fen(), black = fen.split(" ")[1] === "b";
     copy(`Chess question: what is the right plan in this position, and WHY? Explain the pawn structure, the worst piece of each side, and the 2-3 candidate plans.\n\nFEN: ${fen}\n${hist.length ? "Moves played to get here: " + hist.map((h) => h.san).join(" ") + "\n" : ""}Stockfish (eval from White's view):\n${lastLines.map((l) => `${fmtScore(l, black)} ${pvToSan(fen, l.pv, 8)}`).join("\n")}\n\nMy idea was: …`);
@@ -496,6 +521,122 @@ function board(v, arg) {
     save(); logEvent("endgame", "Position added: " + theme); toast("Added under Endgames");
   };
   refresh();
+}
+
+// ------------------------------------------------------------------ THINKING TOOLS (reader + think sheet + notebook)
+const QUESTIONS = [
+  ["material", "1. Material & imbalances", "Who has more? Are there special imbalances (bishop pair, two minors vs rook, exchange)?"],
+  ["threats", "2. Opponent's threats & loose pieces", "What did their last move change? What do THEY want to take or check next? Which pieces (yours or theirs) are loose or hanging?"],
+  ["forcing", "3. My forcing moves", "Checks, captures and threats that I have. Do any of them work?"],
+  ["structure", "4. Kings & pawn structure", "Whose king is weaker? Passed, isolated or doubled pawns? Open files? Which pawn breaks are there?"],
+  ["plan", "5. Plan: worst piece & goal", "Which of my pieces is worst, and where does it belong? What is my goal for the next 3-5 moves?"],
+];
+
+function readerHtml(fen) {
+  let R; try { R = readPosition(fen); } catch (e) { return `<p class="muted">Couldn't read this position.</p>`; }
+  const sec = (t, k) => `<h3>${t}</h3><ul class="small">${R.sections[k].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  return `<div class="feedback info small"><b>What this means for ${R.turn === "w" ? "White" : "Black"} (to move):</b><ul>${R.hints.map((h) => `<li>${esc(h)}</li>`).join("")}</ul></div>` +
+    sec("Material", "material") + sec("Loose & hanging pieces", "loose") + sec("Threats (opponent)", "threats") + sec("Forcing moves (side to move)", "forcing") +
+    sec("King safety", "kings") + sec("Pawn structure & files", "pawns") + sec("Activity", "activity") +
+    `<p class="small muted">Rule-based reading (no engine): good for spotting facts, but you have to judge what matters most. Then compare with the engine.</p>`;
+}
+
+// Think sheet: 5 questions + candidate moves with ideas, checked by the engine on request.
+// getFen() returns the position the sheet is about; note = existing notebook entry or null.
+function thinkSheet(container, getFen, { note = null, source = "board", title = "" } = {}) {
+  const p = P();
+  const n = note || { id: null, answers: {}, candidates: [{ move: "", idea: "" }], conclusion: "", title };
+  container.innerHTML = `<h2>Think sheet</h2>
+    <p class="small muted">Answer the questions BEFORE you look at the engine. Short notes are fine, the point is that you look.</p>
+    ${QUESTIONS.map(([k, t, help]) => `<label class="f" style="margin-top:8px"><b style="color:var(--ink)">${t}</b><span class="small">${help}</span><textarea data-q="${k}" style="min-height:52px">${esc(n.answers[k] || "")}</textarea></label>`).join("")}
+    <h3>Candidate moves</h3><p class="small muted">Write 2-3 moves with the idea behind each one, and the opponent's best answer you expect.</p>
+    <div id="cands"></div>
+    <div class="row" style="margin-top:6px"><button class="btn secondary" id="addCand">+ Candidate</button><button class="btn" id="checkCands">Check candidates with engine</button></div>
+    <label class="f" style="margin-top:10px"><b style="color:var(--ink)">Conclusion / what I learned</b><textarea id="concl" style="min-height:52px">${esc(n.conclusion || "")}</textarea></label>
+    <div class="row" style="margin-top:8px"><input class="grow" id="noteTitle" placeholder="Title (e.g. 'Middlegame vs X, move 22')" value="${esc(n.title || "")}"><button class="btn secondary" id="saveNote">Save to notebook</button></div>`;
+  const cands = container.querySelector("#cands");
+  const drawCands = () => {
+    cands.innerHTML = n.candidates.map((c, i) => `<div class="list-item" style="margin:6px 0"><div class="row"><input data-cm="${i}" placeholder="Move (e.g. Nd7)" value="${esc(c.move)}" style="width:110px">
+      <input class="grow" data-ci="${i}" placeholder="Idea: why this move, what do I expect?" value="${esc(c.idea)}"><button class="btn secondary small" data-cx="${i}" title="Remove">✕</button></div>
+      ${c.verdict ? `<div class="small" style="margin-top:4px"><span class="pill ${c.verdict === "best" || c.verdict === "good" ? "good" : c.verdict}">${esc(c.verdict)}</span> eval ${esc(c.evalTxt)} · line: ${esc(c.line)}</div>` : ""}
+      ${c.error ? `<div class="small" style="color:var(--bad)">${esc(c.error)}</div>` : ""}</div>`).join("");
+    cands.querySelectorAll("[data-cm]").forEach((x) => (x.oninput = () => { n.candidates[+x.dataset.cm].move = x.value.trim(); n.candidates[+x.dataset.cm].verdict = null; }));
+    cands.querySelectorAll("[data-ci]").forEach((x) => (x.oninput = () => (n.candidates[+x.dataset.ci].idea = x.value)));
+    cands.querySelectorAll("[data-cx]").forEach((x) => (x.onclick = () => { n.candidates.splice(+x.dataset.cx, 1); drawCands(); }));
+  };
+  drawCands();
+  const collect = () => { container.querySelectorAll("[data-q]").forEach((t) => (n.answers[t.dataset.q] = t.value)); n.conclusion = container.querySelector("#concl").value; n.title = container.querySelector("#noteTitle").value.trim(); };
+  container.querySelector("#addCand").onclick = () => { collect(); n.candidates.push({ move: "", idea: "" }); drawCands(); };
+  container.querySelector("#checkCands").onclick = async (ev) => {
+    collect(); const fen = getFen(); const btn = ev.target; btn.disabled = true; btn.textContent = "Checking…";
+    const stm = fen.split(" ")[1];
+    for (const c of n.candidates) {
+      c.error = null; c.verdict = null;
+      if (!c.move) continue;
+      let mv; try { mv = new Chess(fen).move(c.move); } catch { mv = null; }
+      if (!mv) { c.error = `"${c.move}" is not a legal move in this position.`; continue; }
+      c.move = mv.san;
+      const g = await gradeMove(fen, mv.from + mv.to + (mv.promotion || ""), 1200);
+      c.verdict = g.verdict; const sg = (x) => (x >= 0 ? "+" : "") + (x / 100).toFixed(2);
+      c.evalTxt = `${sg(g.afterCp)} for ${stm === "w" ? "White" : "Black"} (best move: ${sg(g.bestCp)})`;
+      const after = new Chess(fen); after.move(c.move);
+      const [l] = await getEngine().analyse(after.fen(), { movetime: 600 });
+      c.line = `${mv.san} ${pvToSan(after.fen(), l?.pv || [], 6)}`.trim();
+      c.best = g.bestLine.split(" ")[0];
+    }
+    const bestTxt = n.candidates.find((c) => c.best)?.best;
+    drawCands(); btn.disabled = false; btn.textContent = "Check candidates with engine";
+    if (bestTxt && !n.candidates.some((c) => c.move === bestTxt)) cands.insertAdjacentHTML("beforeend", `<div class="feedback info small">The engine's top move is <b>${esc(bestTxt)}</b>, which is not on your list. Which question would have led you to it?</div>`);
+  };
+  container.querySelector("#saveNote").onclick = () => {
+    collect();
+    const entry = { ...n, id: n.id || "n" + Date.now().toString(36), fen: getFen(), date: n.date || today(), updated: today(), source, title: n.title || `Position ${today()}` };
+    p.notebook ||= [];
+    const i = p.notebook.findIndex((x) => x.id === entry.id);
+    if (i >= 0) p.notebook[i] = entry; else { p.notebook.unshift(entry); logEvent("notebook", "Position saved: " + entry.title); }
+    n.id = entry.id; save(); toast("Saved in Notebook");
+  };
+  return { collect, note: n };
+}
+
+function evalGuideHtml() {
+  return `<details><summary><b>How do I evaluate a position?</b> (tap to open)</summary>
+  <div class="small" style="margin-top:8px">
+  <p><b>Who is better, and why?</b> Go through these four factors, roughly in order of importance:</p>
+  <ol><li><b>Material</b>: pawn 1, knight/bishop 3, rook 5, queen 9. Two minor pieces vs a rook ≈ +1 for the pieces in the middlegame. The bishop pair is worth about half a pawn in open positions.</li>
+  <li><b>King safety</b>: a king with few pawns in front of it, or open files toward it, can outweigh material, especially with queens on the board.</li>
+  <li><b>Activity</b>: which pieces do something, and which are passive? Look for the worst piece of each side. Who has open files and outposts?</li>
+  <li><b>Pawn structure</b>: passed pawns (strong, push them), isolated or doubled pawns (weak, targets), pawn breaks (how you open the position).</li></ol>
+  <p><b>From evaluation to plan:</b> if you are ahead in material, remove counterplay and trade pieces. If the enemy king is weak, attack it. If you have the better structure, trade into an endgame. If you have a passive piece, improve it first.</p>
+  <p><b>Finding candidate moves:</b></p>
+  <ol><li>Forcing moves first: <b>checks, captures, threats</b>, for both sides.</li>
+  <li>No tactics? Then look at <b>improving moves</b>: worst piece to a better square, a rook to an open file, a pawn break, prophylaxis (stop their plan).</li>
+  <li>Pick 2-3 candidates. For EACH one: what is the opponent's best reply? The candidate that holds up best against the best reply wins.</li>
+  <li><b>Blunder check</b> before you play: what does this piece leave unprotected? Which line opens? What can the opponent take or check now?</li></ol>
+  <p><b>Reading the engine number</b> (+ = good for White): ±0.3 equal · ±0.7 slightly better · ±1.5 clearly better · ±3 or more winning. The number says WHO is better; your four factors say WHY.</p>
+  <p><b>Order matters:</b> pieces before pawns (a pawn move can't be undone), moves with tempo first, and grab free material before trading.</p>
+  </div></details>`;
+}
+
+// ------------------------------------------------------------------ NOTEBOOK
+function notebook(v) {
+  const p = P(); p.notebook ||= [];
+  v.innerHTML = `<div class="card"><h2>Notebook</h2><p class="small">Your positions with your own thoughts, candidate moves and conclusions. Make new ones on the <b>Board</b> (Think sheet → Save), or from a puzzle.</p>${evalGuideHtml()}</div>
+    ${p.notebook.length ? p.notebook.map((n) => `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(n.title)}</h2><span class="small muted">${esc(n.date)}${n.updated && n.updated !== n.date ? " · updated " + esc(n.updated) : ""}</span></div>
+      <div class="small muted" style="margin:4px 0 8px">FEN: <code>${esc(n.fen)}</code></div>
+      ${QUESTIONS.filter(([k]) => n.answers?.[k]).map(([k, t]) => `<div class="small"><b>${t}</b>: ${esc(n.answers[k])}</div>`).join("")}
+      ${n.candidates?.filter((c) => c.move).length ? `<h3>Candidates</h3>${n.candidates.filter((c) => c.move).map((c) => `<div class="small">• <b>${esc(c.move)}</b>: ${esc(c.idea || "")} ${c.verdict ? `<span class="pill ${c.verdict === "best" || c.verdict === "good" ? "good" : c.verdict}">${esc(c.verdict)}</span>` : ""}</div>`).join("")}` : ""}
+      ${n.conclusion ? `<div class="feedback info small"><b>Conclusion:</b> ${esc(n.conclusion)}</div>` : ""}
+      <div class="row" style="margin-top:8px"><button class="btn secondary" data-open="${n.id}">Open on Board</button><button class="btn secondary" data-copy="${n.id}">Copy for Claude</button><button class="btn secondary" data-del="${n.id}">Delete</button></div></div>`).join("") : `<div class="card"><p class="muted">No positions saved yet.</p><button class="btn" id="toB">Go to Board</button></div>`}`;
+  $("#toB") && ($("#toB").onclick = () => go("board"));
+  v.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => { const n = p.notebook.find((x) => x.id === b.dataset.open); go("board", { fen: n.fen, note: n }); }));
+  v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => { if (confirm("Delete this position?")) { p.notebook = p.notebook.filter((x) => x.id !== b.dataset.del); save(); go("notebook"); } }));
+  v.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => { const n = p.notebook.find((x) => x.id === b.dataset.copy); copy(noteForClaude(n)); }));
+}
+function noteForClaude(n) {
+  return `Chess position: give feedback on my thinking. Is my assessment right, which candidate is best and WHY, and what did I miss?\n\nFEN: ${n.fen}\n\n` +
+    QUESTIONS.map(([k, t]) => `${t}: ${n.answers?.[k] || "-"}`).join("\n") +
+    `\n\nMy candidates:\n${(n.candidates || []).filter((c) => c.move).map((c) => `- ${c.move}: ${c.idea || ""}${c.verdict ? ` [engine: ${c.verdict}, ${c.evalTxt}]` : ""}`).join("\n")}\n\nConclusion: ${n.conclusion || "-"}`;
 }
 
 // ------------------------------------------------------------------ LOG
@@ -528,6 +669,7 @@ function markdownLog(p) {
   L.push("## Repertoire", `- White: ${p.repertoire.white || "–"}`, `- vs 1.e4: ${p.repertoire.vsE4 || "–"}`, `- vs 1.d4: ${p.repertoire.vsD4 || "–"}`, p.repertoire.notes ? `\n${p.repertoire.notes}` : "", "");
   L.push("## Endgame tracker", "| Position | Status | Next review |", "|---|---|---|", ...allEndgames(p).map((e) => { const s = p.endgames[e.id]; return `| ${e.theme} | ${!s ? "new" : s.box >= 4 ? "known" : "learning"} | ${s ? s.due : "–"} |`; }), "");
   const pz = Object.values(p.puzzles); L.push(`## Puzzles from own games`, `${pz.length} total, ${pz.filter((x) => x.box >= 4).length} known, ${pz.filter((x) => !x.due || x.due <= today()).length} due.`, "");
+  if ((p.notebook || []).length) L.push("## Notebook", ...p.notebook.slice(0, 30).map((n) => `- **${n.title}** (${n.date}): ${(n.candidates || []).filter((c) => c.move).map((c) => c.move + (c.idea ? " [" + c.idea + "]" : "")).join("; ")}${n.conclusion ? " → " + n.conclusion : ""}`), "");
   L.push("## Next steps", ...p.nextSteps.map((s) => `- [${s.done ? "x" : " "}] ${s.text}`), "", "## Log", ...p.log.slice(0, 100).map((l) => `- ${l.date.slice(0, 10)} · ${l.type} · ${l.text}`));
   return L.join("\n");
 }
