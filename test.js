@@ -3,6 +3,8 @@
 import { Chess } from "./vendor/chess.js";
 import { Board } from "./board.js";
 import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
+import { explainMove, explainHtml } from "./explain.js";
+import { aiKey, setAiKey, testKey, rubricFrom, judgeReasoning } from "./ai.js";
 
 let BANK = null;
 async function bank() { if (!BANK) BANK = await import("./testbank.js"); return BANK; }
@@ -54,9 +56,19 @@ export async function testView(v, C) {
       <p class="small muted">Tip: play it like a game. Think, write down your reasoning and the line you calculated, then move. The category stays hidden until you've answered.</p>
       <div class="row"><button class="btn" data-mode="quick">Quick test (12 positions, ~20 min)</button><button class="btn secondary" data-mode="full">Full test (32 positions, ~50 min)</button></div>
       ${last ? `<p class="small" style="margin-top:10px">Last test: ${C.esc(last.date)}, overall ${last.result?.overall ?? "–"}. <a href="#" id="toRes">See results</a></p>` : ""}</div>
+      <div class="card"><h2>AI coach (Gemini, free)</h2>
+        <p class="small">With an AI key, an AI reads your written reasoning and checks how far you saw: the <b>idea</b> (e.g. the fork), the <b>danger</b> (e.g. capturing straight away loses your queen) and the <b>follow-up & plan</b> (e.g. move the queen first, keep the opponent passive). Rejecting the move for the right reason counts as half right. Stockfish supplies the chess facts; the AI only judges your text.</p>
+        <ol class="small"><li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with a Google account.</li><li>Click <b>Create API key</b> and copy it (free, no credit card needed).</li><li>Paste it here and click Save.</li></ol>
+        <div class="row"><input id="aiKey" type="password" class="grow" placeholder="Gemini API key" value="${aiKey() ? "••••••••••••" : ""}"><button class="btn secondary" id="aiSave">Save</button><button class="btn secondary" id="aiTest">Test</button>${aiKey() ? `<button class="btn secondary" id="aiDel">Remove</button>` : ""}</div>
+        <div id="aiMsg" class="small" style="margin-top:6px">${aiKey() ? "✓ AI coach is on." : "AI coach is off."}</div>
+        <p class="small muted">Your key stays in this browser only (not in backups or on GitHub). Position, moves and your notes are sent to Google Gemini for the assessment. Free tier: a limited number of requests per minute.</p></div>
       <div class="card"><h2>Training modules</h2><p class="small">Practise one category at a time around your level, without a test score. Your results appear in the Log.</p>
       <div class="row">${TAC_CATS.concat(Object.keys(POS_GROUPS)).map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">${C.esc(catLabel(c))}</button>`).join("")}</div></div>`;
     v.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = async () => { await startTest(p, b.dataset.mode, C); C.go("test"); }));
+    const msg = v.querySelector("#aiMsg");
+    v.querySelector("#aiSave").onclick = () => { const k = v.querySelector("#aiKey").value.trim(); if (!k || k.startsWith("•")) return; setAiKey(k); msg.textContent = "Saved. Click Test to check it."; };
+    v.querySelector("#aiTest").onclick = async () => { msg.textContent = "Testing…"; try { const r = await testKey(); msg.textContent = r.ok ? `✓ Works (model: ${r.model}).` : "Unexpected answer."; } catch (e) { msg.textContent = "✗ " + (e.message || e); } };
+    v.querySelector("#aiDel") && (v.querySelector("#aiDel").onclick = () => { setAiKey(""); C.go("test"); });
     v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
     v.querySelector("#toRes") && (v.querySelector("#toRes").onclick = (e) => { e.preventDefault(); C.go("results"); });
     return;
@@ -178,34 +190,54 @@ async function runItem(v, cur, C, opts) {
     b.querySelector("#toBoardIt").onclick = () => C.go("board", { fen });
   };
 
-  const finish = (note) => {
+  const finish = async (note) => {
     if (finished) return; finished = true; clearInterval(timer);
-    let score;
-    if (slot.kind === "pos") score = moveScore ?? 0;
-    else score = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
-    const idea = ideaCheck(ideaTxt, themes);
-    const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, depth: depthStart ?? 0, depthTotal, stages, nMine,
+    let base;
+    if (slot.kind === "pos") base = moveScore ?? 0;
+    else base = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
+    v.querySelector("#stage").innerHTML = "";
+    const useAI = !!aiKey() && !!(ideaTxt || lineTxt);
+    v.querySelector("#tfb").innerHTML = `<div class="feedback info">${C.esc(note)}<br><span class="small">Stockfish is working out why ${C.esc(solSan[0])} is the move${useAI ? ", and the AI coach is reading your reasoning" : ""}…</span></div>`;
+    scrollFb();
+    let x = null, ai = null, aiErr = null;
+    try { x = await explainMove(C.engine(), fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); }
+    if (useAI && x) {
+      try {
+        const [top] = await C.engine().analyse(fen, { movetime: 600 });
+        ai = await judgeReasoning({ fen, side: stm === "w" ? "White" : "Black", category: catLabel(slot.cat), rating: it.r, solution: solSan.join(" "),
+          engineLine: x.facts.find((f) => f.includes("Main line")) || solSan.join(" "), evalText: `${x.san} ${(x.bestCp / 100).toFixed(1)} for the player`,
+          alternatives: x.alts.map((a) => `${a.san} ${(a.cp / 100).toFixed(1)}`).join(", ") || "-", rubric: rubricFrom(x, solSan.join(" ")),
+          userMove: firstMove, userLine: lineTxt, userNotes: ideaTxt });
+      } catch (e) { aiErr = e.message || String(e); console.warn(e); }
+    }
+    let score = base;
+    if (ai) { score = 0.5 * base + 0.5 * ai.understanding; if (base < 0.5 && ai.rejected) score = Math.max(score, 0.45); }
+    const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, moveScore: base, depth: depthStart ?? 0, depthTotal, stages, nMine,
       timeMs: (tSubmit || Date.now()) - t0, totalMs: Date.now() - t0, move: firstMove, character, why: ideaTxt, line: lineTxt, plannedMatch: depthStart ?? 0,
-      solution: solSan.join(" "), themes, notes: allNotes, ideaHit: idea.hit, url: it.url || (it.c ? `https://lichess.org/training/${it.id}` : "") };
+      solution: solSan.join(" "), themes, notes: allNotes, url: it.url || (it.c ? `https://lichess.org/training/${it.id}` : ""),
+      explain: x ? { saw: x.conceptCheck.filter((c) => c.hit).map((c) => c.label), missed: x.conceptCheck.filter((c) => !c.hit).map((c) => c.label) } : null,
+      ai: ai ? { idea: ai.levels.idea.credit, danger: ai.levels.danger.credit, followup: ai.levels.followup.credit, rejected: ai.rejected, feedback: ai.feedback, missed: ai.missed } : null };
     if (opts.test) {
       cur.items.push(rec);
       const K = Math.max(70, 320 / Math.sqrt(cur.items.length));
       cur.est.overall += K * (score - expected(it.r, cur.est.overall));
-      const ce = cur.est[slot.cat] ?? cur.est.overall; cur.est[slot.cat] = ce + Math.max(90, 300 / Math.sqrt(cur.items.filter((x) => x.cat === slot.cat).length)) * (score - expected(it.r, ce));
+      const ce = cur.est[slot.cat] ?? cur.est.overall; cur.est[slot.cat] = ce + Math.max(90, 300 / Math.sqrt(cur.items.filter((x2) => x2.cat === slot.cat).length)) * (score - expected(it.r, ce));
     } else opts.onDone && opts.onDone(rec);
     C.save();
-    v.querySelector("#stage").innerHTML = "";
-    v.querySelector("#tfb").innerHTML = `<div class="feedback ${score >= 0.99 ? "ok" : score > 0 ? "info" : "no"}"><b>${C.esc(note)}</b><br>Solution: <b>${C.esc(solSan.join(" "))}</b>
+    const lvl = (id, label) => { const l = ai.levels[id]; return `<li>${l.credit >= 1 ? "✓" : l.credit > 0 ? "½" : "✗"} <b>${label}</b>${l.evidence && l.evidence !== "-" ? `: <i>"${C.esc(l.evidence)}"</i>` : ""}</li>`; };
+    v.querySelector("#tfb").innerHTML = `<div class="feedback ${score >= 0.9 ? "ok" : score > 0 ? "info" : "no"}"><b>${C.esc(note)}</b><br>Solution: <b>${C.esc(solSan.join(" "))}</b>
       <div class="small" style="margin-top:6px">${slot.kind === "tac" ? `<b>Calculated from the start:</b> ${depthStart ?? 0} of ${nMine} of your moves${depthTotal > (depthStart ?? 0) ? ` · <b>with help</b> (after moves had been played): ${depthTotal} of ${nMine}` : ""}<br>` : ""}
-      Score for this position: <b>${Math.round(score * 100)}%</b> · time to your answer: ${Math.round(rec.timeMs / 1000)} s · category: ${C.esc(catLabel(slot.cat))} · position rating ≈ ${it.r}</div>
-      ${allNotes.length ? `<ul class="small">${allNotes.map((n) => `<li>${C.esc(n)}</li>`).join("")}</ul>` : ""}
-      ${ideaTxt ? `<div class="small"><b>Your idea</b> (rough keyword check): ${idea.hit.length ? `mentions ${C.esc(idea.hit.join(", "))}, which matches the themes of this position` : idea.said.length ? `mentions ${C.esc(idea.said.join(", "))}; the position is mainly about ${C.esc(idea.want.join(", ") || catLabel(slot.cat))}` : "no recognisable theme words"}. For real feedback on your reasoning: Results → "Copy for Claude".</div>` : ""}
-      ${themes.length ? `<div class="small muted">Themes: ${C.esc(themes.join(", "))}</div>` : ""}</div>
-      <p class="small muted">How the score works: a position counts for 100% if you saw the whole line from the start. Moves you only found after help count for half. For positional positions: the best move = 100%, an equally good alternative 70%, playable 40%.</p>
+      Score for this position: <b>${Math.round(score * 100)}%</b>${ai ? ` (move/line ${Math.round(base * 100)}% + understanding ${Math.round(ai.understanding * 100)}%)` : ""} · time to your answer: ${Math.round(rec.timeMs / 1000)} s · ${C.esc(catLabel(slot.cat))} · rating ≈ ${it.r}</div>
+      ${allNotes.length ? `<ul class="small">${allNotes.map((n) => `<li>${C.esc(n)}</li>`).join("")}</ul>` : ""}</div>
+      ${ai ? `<div class="card" style="margin-top:10px"><h3 style="margin-top:0">AI coach: how far did you see?</h3><ul class="small">${lvl("idea", "Idea (what the move does)")}${lvl("danger", "Danger (why the obvious follow-up fails / the opponent's defence)")}${lvl("followup", "Follow-up & plan")}</ul>
+        ${ai.rejected ? `<p class="small"><b>Half right:</b> you didn't play the move, but you rejected it for the real danger.</p>` : ""}
+        <p class="small">${C.esc(ai.feedback)}</p>${ai.missed ? `<p class="small"><b>Most important thing you missed:</b> ${C.esc(ai.missed)}</p>` : ""}</div>`
+        : aiErr ? `<div class="feedback no small">AI coach unavailable: ${C.esc(aiErr)}</div>` : !aiKey() && (ideaTxt || lineTxt) ? `<p class="small muted">Tip: add a free Gemini key on the Test start page, and the AI coach will judge your reasoning (idea, danger, follow-up).</p>` : ""}
+      ${explainHtml(x, C.esc)}
+      <p class="small muted">How the score works: your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%.</p>
       <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button></div>`;
     stepper(solSan, fen);
     v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
-    scrollFb();
   };
 
   // stage: position after `pre` plies of the solution; user writes the rest
@@ -293,6 +325,8 @@ export function computeResult(p, t, A = null) {
   R.planned = planned.length ? { n: planned.length, avgMatch: +(planned.reduce((a, x) => a + x.plannedMatch, 0) / planned.length).toFixed(1) } : null;
   const times = items.filter((i) => i.move).map((i) => i.timeMs / 1000).sort((a, b) => a - b);
   R.time = times.length ? { median: Math.round(times[Math.floor(times.length / 2)]), correct: avg(items.filter((i) => i.score >= 0.99 && i.move).map((i) => i.timeMs / 1000)), wrong: avg(items.filter((i) => i.score < 0.5 && i.move).map((i) => i.timeMs / 1000)) } : null;
+  const ai = items.filter((i) => i.ai);
+  R.ai = ai.length ? { n: ai.length, idea: Math.round(100 * ai.reduce((a, x) => a + x.ai.idea, 0) / ai.length), danger: Math.round(100 * ai.reduce((a, x) => a + x.ai.danger, 0) / ai.length), followup: Math.round(100 * ai.reduce((a, x) => a + x.ai.followup, 0) / ai.length), rejected: ai.filter((x) => x.ai.rejected).length } : null;
   const ch = items.filter((i) => i.character); const chWrong = items.filter((i) => i.character && i.score < 0.5);
   R.character = { aggressive: pct(ch, "aggressive"), solid: pct(ch, "solid"), wrongAggressive: pct(chWrong, "aggressive"), wrongSolid: pct(chWrong, "solid"), nWrong: chWrong.length };
   // ---- player type scores (0-100 each): test deltas + questionnaire + games
@@ -345,6 +379,7 @@ export function resultsView(v, C) {
       ${R.depth ? `<li><b>Calculation depth:</b> on positions with 2+ moves, you saw on average <b>${R.depth.avg} of ${R.depth.avgNeeded}</b> of your moves <b>from the start</b>, and <b>${R.depth.avgHelp}</b> once the first moves had been played for you. ${R.depth.full}/${R.depth.n} completely right from the start. ${R.depth.avgHelp - R.depth.avg >= 0.7 ? "Big gap between 'from the start' and 'with help': you do find the moves, but you don't see them far enough ahead. Train by calculating long puzzles without moving the pieces, and write down the whole line." : R.depth.avg / R.depth.avgNeeded < 0.6 ? "You often stop calculating too early: keep going until the position is quiet (no more checks or captures)." : "You calculate lines through well."}</li>` : ""}
 
       ${R.time ? `<li><b>Time:</b> median ${R.time.median}s to your first move${R.time.correct ? `; right answers ${R.time.correct}s` : ""}${R.time.wrong ? `, wrong answers ${R.time.wrong}s` : ""}. ${R.time.wrong && R.time.correct && R.time.wrong < R.time.correct * 0.7 ? "Your wrong answers came faster than your right ones: you play too quickly when you think you see it. Do a blunder check!" : ""}</li>` : ""}
+      ${R.ai ? `<li><b>Depth of understanding</b> (AI coach, ${R.ai.n} positions): you saw the <b>idea</b> in ${R.ai.idea}%, the <b>danger</b> in ${R.ai.danger}% and the <b>follow-up & plan</b> in ${R.ai.followup}% of positions. ${R.ai.danger < R.ai.idea - 15 ? "You often see the idea but not the danger behind it: before you play, ask what goes wrong after the most obvious follow-up." : R.ai.followup < R.ai.danger - 15 ? "You see the ideas and dangers, but the follow-up plan is the next step: what do you play AFTER the first moves?" : ""}${R.ai.rejected ? ` ${R.ai.rejected}× you rejected the right move for the right reason (half right).` : ""}</li>` : ""}
       <li><b>Character of your moves:</b> ${R.character.aggressive}% aggressive (check, capture, toward the king), ${R.character.solid}% solid. ${R.character.nWrong ? `Of your wrong answers, ${R.character.wrongAggressive}% were aggressive and ${R.character.wrongSolid}% solid.` : ""}</li></ul></div>
     <div class="card"><h2>Your answers</h2><div class="scroll"><table><tr><th>#</th><th>Category</th><th>Rating</th><th>Your line</th><th>Solution</th><th>Depth</th><th>Score</th><th>Time</th><th>Your reasoning</th></tr>
       ${t.items.map((i, k) => `<tr><td>${k + 1}</td><td class="small">${C.esc(catLabel(i.cat))}</td><td>${i.rating}</td><td class="small">${C.esc(i.line || i.move || "–")}</td><td class="small">${C.esc(i.solution)}</td><td class="small">${i.kind === "tac" ? `${i.depth}${(i.depthTotal ?? i.depth) > i.depth ? `→${i.depthTotal}` : ""}/${i.nMine}` : "–"}</td><td>${Math.round(i.score * 100)}%</td><td>${Math.round(i.timeMs / 1000)}s</td><td class="small">${C.esc(i.why || "")}</td></tr>`).join("")}</table></div>
@@ -352,7 +387,7 @@ export function resultsView(v, C) {
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
   v.querySelector("#toProf").onclick = () => C.go("profile");
   v.querySelector("#copyT").onclick = () => C.copy(`Chess test. Give feedback on my REASONING per position (not just the move): what did I see right, what did I miss, and what does that say about how I think?\nMy rating: ${R.elo}. Test rating ${R.overall} (tactical ${R.tactical}, positional ${R.positional}).\n\n` +
-    t.items.map((i, k) => `${k + 1}. [${catLabel(i.cat)}, ≈${i.rating}] FEN ${i.fen}\n   My move: ${i.move || "-"} (${Math.round(i.timeMs / 1000)}s), solution: ${i.solution}, score ${Math.round(i.score * 100)}%\n   My reasoning: ${i.why || "-"}${i.line ? `\n   My line: ${i.line}` : ""}`).join("\n"));
+    t.items.map((i, k) => `${k + 1}. [${catLabel(i.cat)}, ≈${i.rating}] FEN ${i.fen}\n   My move: ${i.move || "-"} (${Math.round(i.timeMs / 1000)}s), solution: ${i.solution}, score ${Math.round(i.score * 100)}%\n   My reasoning: ${i.why || "-"}${i.line ? `\n   My line: ${i.line}` : ""}${i.ai ? `\n   AI coach: idea ${i.ai.idea}, danger ${i.ai.danger}, follow-up ${i.ai.followup}. ${i.ai.feedback}` : i.explain ? `\n   App check: saw ${i.explain.saw.join("; ") || "-"}; missed ${i.explain.missed.join("; ") || "-"}` : ""}`).join("\n"));
 }
 
 // ------------------------------------------------------------------ PROFILE

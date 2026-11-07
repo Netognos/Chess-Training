@@ -5,6 +5,7 @@ import { splitPgn, analyseGame, aggregate, pvToSan, parseGame } from "./analysis
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
+import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo } from "./test.js";
 
 // ------------------------------------------------------------------ state
@@ -42,7 +43,7 @@ const SECTIONS = {
   analyse: [["home", "Start"], ["games", "Games"], ["report", "Report"], ["training", "Training"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"], ["log", "Log"]],
   test: [["test", "Test"], ["results", "Results"], ["profile", "Profile"], ["practice", "Modules"]],
 };
-const C = { P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate };
+const C = { P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
 const views = { home, games, report, training, puzzles, endgames, board, notebook, log,
   test: (v) => testView(v, C), results: (v) => resultsView(v, C), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
@@ -468,7 +469,8 @@ function puzzles(v) {
   if (!all.length) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>Analyse games first: your biggest mistakes become puzzles here.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   const known = all.filter((x) => (x.box || 0) >= 4).length;
   v.innerHTML = `<div class="two"><div><div id="pb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
-    <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button></div>
+    <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button><button class="btn secondary" id="pWhy">Explain the solution</button></div>
+    <div id="pWhyOut"></div>
     <div class="card hidden" id="pReadOut" style="margin-top:12px"></div><div class="card hidden" id="pSheetOut" style="margin-top:12px"></div></div>
     <div><div class="card"><h2>Your mistakes as puzzles</h2><div class="small muted">${due.length} due · ${all.length} total · ${known} known</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
     <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
@@ -480,7 +482,7 @@ function puzzles(v) {
     brd.locked = false; brd.setFen(cur.fen); brd.setOrientation(cur.fen.split(" ")[1]);
     const side = cur.fen.split(" ")[1] === "w" ? "White" : "Black";
     $("#pinfo").innerHTML = `<b>Move ${cur.moveNo}, you're ${side}</b> (${esc(cur.phase)}). Eval before your move: ${cur.evalBefore > 0 ? "+" : ""}${cur.evalBefore}.<br><span class="small muted">${cur.played === "?" ? "Your own position: find the best move." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}. Find a better move.`}</span>`;
-    $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden");
+    $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden"); $("#pWhyOut").innerHTML = "";
   };
   brd.onMove = async (mv, before) => {
     if (!cur || solved) return;
@@ -503,6 +505,13 @@ function puzzles(v) {
   $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
   $("#explore").onclick = () => cur && go("board", { fen: cur.fen });
   $("#next").onclick = () => { idx++; show(); };
+  $("#pWhy").onclick = async () => {
+    if (!cur) return; const out = $("#pWhyOut"); const m = new Chess(cur.fen).move(cur.best);
+    out.innerHTML = `<div class="feedback info small">Stockfish is working out why ${esc(cur.best)} is the move…</div>`;
+    const sheet = $("#pSheetOut"); const notes = sheet && !sheet.classList.contains("hidden") ? [...sheet.querySelectorAll("textarea, input")].map((x) => x.value).join(" ") : "";
+    try { out.innerHTML = explainHtml(await explainMove(getEngine(), cur.fen, m.from + m.to + (m.promotion || ""), notes, ""), esc); } catch (e) { out.innerHTML = ""; console.warn(e); }
+    if (!solved) { srs(cur, false); save(); solved = true; brd.locked = true; }
+  };
   $("#pRead").onclick = () => { if (!cur) return; const o = $("#pReadOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) o.innerHTML = `<h2>Read the position</h2>` + readerHtml(cur.fen); };
   $("#pSheet").onclick = () => { if (!cur) return; const o = $("#pSheetOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) thinkSheet(o, () => cur.fen, { source: "puzzle", title: `Puzzle: move ${cur.moveNo}${cur.game ? " (" + cur.game.split("/").pop() + ")" : ""}` }); };
   show();
