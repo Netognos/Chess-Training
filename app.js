@@ -32,7 +32,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.re
 function logEvent(type, text) { const p = P(); if (!p) return; p.log.unshift({ date: new Date().toISOString(), type, text }); save(); }
 function newPlayer(d) {
   const id = "p" + Date.now().toString(36);
-  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", gameknot: d.gameknot || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4,
+  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4,
     createdAt: today(), games: {}, reports: [], puzzles: {}, endgames: {}, customEndgames: [], notebook: [], log: [], nextSteps: [], repertoire: { white: "", vsE4: "", vsD4: "", notes: "" }, settings: { movetime: 150 } };
   S.current = id; save(); return id;
 }
@@ -92,10 +92,10 @@ function home(v) {
   const dueEg = allEndgames(p).filter((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }).length;
   const last = p.reports[0];
   const nG = Object.keys(p.games).length;
-  const stepsDef = [["1", "Profile", !!p.name, "home"], ["2", "Accounts", !!(p.lichess || p.chesscom || p.gameknot), "home"], ["3", "Load games", nG > 0, "games"], ["4", "Statistics", nG > 0, "report"], ["5", "Strengths & weak points", nG > 0, "report"], ["6", "Training", Object.keys(p.practice || {}).length > 0, "training"]];
+  const stepsDef = [["1", "Profile", !!p.name, "home"], ["2", "Accounts", !!(p.lichess || p.chesscom), "home"], ["3", "Load games", nG > 0, "games"], ["4", "Statistics", nG > 0, "report"], ["5", "Strengths & weak points", nG > 0, "report"], ["6", "Training", Object.keys(p.practice || {}).length > 0, "training"]];
   v.innerHTML = `<div class="card"><h2>Step by step</h2><div class="steps">${stepsDef.map(([n, l, d, t]) => `<div class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${n}</div>${l}</div>`).join("")}
     <div class="step" data-go="test"><div class="n">→</div>Test & player profile</div></div>
-    ${!(p.lichess || p.chesscom || p.gameknot) ? `<p class="small" style="margin-top:8px">Fill in your Lichess, Chess.com and/or GameKnot username under <b>Profile</b> below.</p>` : ""}</div>
+    ${!(p.lichess || p.chesscom) ? `<p class="small" style="margin-top:8px">Fill in your Lichess and/or Chess.com username under <b>Profile</b> below.</p>` : ""}</div>
   <div class="card"><h2>${esc(p.name)}</h2>
     <div class="stats">
       <div class="stat"><div class="v">${Object.keys(p.games).length}</div><div class="l">games analysed</div></div>
@@ -115,11 +115,11 @@ function home(v) {
 }
 function profileForm(p) {
   const f = (id, label, val, type = "text", ph = "") => `<label class="f">${label}<input id="pf_${id}" type="${type}" value="${esc(val ?? "")}" placeholder="${ph}"></label>`;
-  return `<div class="form">${f("name", "Name", p.name)}${f("lichess", "Lichess username", p.lichess)}${f("chesscom", "Chess.com username", p.chesscom)}${f("gameknot", "GameKnot username (correspondence)", p.gameknot || "")}
+  return `<div class="form">${f("name", "Name", p.name)}${f("lichess", "Lichess username", p.lichess)}${f("chesscom", "Chess.com username", p.chesscom)}
     ${f("pgnName", "Name in PGN files (OTB)", p.pgnName, "text", "e.g. De Wilde, Sam")}${f("rating", "Rating (approx.)", p.rating)}${f("hours", "Hours per week for chess", p.hours ?? 4, "number")}
     ${f("goal", "Goal", p.goal, "text", "e.g. 1600 rapid by the summer")}</div>`;
 }
-function readProfile(v) { const g = (id) => $("#pf_" + id, v).value.trim(); return { name: g("name"), lichess: g("lichess"), chesscom: g("chesscom"), gameknot: g("gameknot"), pgnName: g("pgnName"), rating: g("rating"), hours: +g("hours") || 4, goal: g("goal") }; }
+function readProfile(v) { const g = (id) => $("#pf_" + id, v).value.trim(); return { name: g("name"), lichess: g("lichess"), chesscom: g("chesscom"), pgnName: g("pgnName"), rating: g("rating"), hours: +g("hours") || 4, goal: g("goal") }; }
 function nextStepsHtml(p) {
   if (!p.nextSteps.length) return `<p class="muted">Steps appear automatically after an analysis. You can also add your own.</p>${addStepHtml()}`;
   return p.nextSteps.map((s, i) => `<label class="row" style="margin:4px 0"><input type="checkbox" data-step="${i}" ${s.done ? "checked" : ""}><span style="flex:1;${s.done ? "text-decoration:line-through;opacity:.6" : ""}">${esc(s.text)}</span></label>`).join("") + addStepHtml();
@@ -138,7 +138,7 @@ function games(v) {
   const list = Object.values(p.games).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   v.innerHTML = `<div class="card"><h2>Load & analyse games</h2>
     <div class="form">
-      <label class="f">Sources<span class="row" style="gap:12px;color:var(--ink)"><label class="row small"><input type="checkbox" id="srcL" ${p.lichess ? "checked" : "disabled"}> Lichess${p.lichess ? ` (${esc(p.lichess)})` : ""}</label><label class="row small"><input type="checkbox" id="srcC" ${p.chesscom ? "checked" : "disabled"}> Chess.com${p.chesscom ? ` (${esc(p.chesscom)})` : ""}</label><label class="row small"><input type="checkbox" id="srcG" ${p.gameknot ? "checked" : ""}> GameKnot${p.gameknot ? ` (${esc(p.gameknot)})` : ""}</label><label class="row small"><input type="checkbox" id="srcP" ${!p.lichess && !p.chesscom && !p.gameknot ? "checked" : ""}> PGN</label></span></label>
+      <label class="f">Sources<span class="row" style="gap:12px;color:var(--ink)"><label class="row small"><input type="checkbox" id="srcL" ${p.lichess ? "checked" : "disabled"}> Lichess${p.lichess ? ` (${esc(p.lichess)})` : ""}</label><label class="row small"><input type="checkbox" id="srcC" ${p.chesscom ? "checked" : "disabled"}> Chess.com${p.chesscom ? ` (${esc(p.chesscom)})` : ""}</label><label class="row small"><input type="checkbox" id="srcP" ${!p.lichess && !p.chesscom ? "checked" : ""}> PGN</label></span></label>
       <label class="f">Period<select id="months"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></label>
       <label class="f">Time control at least<select id="mintc"><option value="300">5+0</option><option value="600" selected>10+0</option><option value="1300">15+10</option><option value="1800">30+0</option></select></label>
       <label class="f">Max. number of games<input id="num" type="number" value="100" min="1" max="500"></label>
@@ -146,14 +146,6 @@ function games(v) {
     </div>
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
-    <div id="gkBox" class="hidden" style="margin-top:10px;border-left:3px solid var(--accent,#5a8);padding-left:10px">
-      <p class="small"><b>GameKnot (correspondence).</b> GameKnot has no public API and doesn't allow other websites to fetch games, so this goes in two quick steps:</p>
-      <ol class="small" style="margin:4px 0 8px 18px;padding:0">
-        <li><a href="https://gameknot.com/" target="_blank" rel="noopener">Open GameKnot</a>, log in, open a finished game and use its <b>PGN</b> download/export (repeat for more games, or use a multi-game download if GameKnot offers one for your account).</li>
-        <li>Choose the downloaded .pgn file(s) below, or paste the PGN text. Several files at once is fine.</li></ol>
-      <textarea id="gkText" placeholder="Paste GameKnot PGN here (one or more games)…"></textarea>
-      <div class="row" style="margin-top:6px"><input type="file" id="gkFile" accept=".pgn,.txt" multiple><span class="small muted" id="gkInfo"></span></div>
-      <p class="small muted">All GameKnot games you add here are used (no period or time-control filter: you choose them yourself). They're marked as "correspondence" so the statistics can be split from your faster games.</p></div>
     <label class="row small" style="margin-top:10px"><input type="checkbox" id="corr"> Also include correspondence games from Lichess and Chess.com (daily)</label>
     <label class="row small" style="margin-top:6px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for the style statistics on games from before this update)</label>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
@@ -168,16 +160,6 @@ function games(v) {
   const srcP = $("#srcP");
   srcP.onchange = () => $("#pgnBox").classList.toggle("hidden", !srcP.checked);
   srcP.onchange();
-  const srcG = $("#srcG");
-  srcG.onchange = () => $("#gkBox").classList.toggle("hidden", !srcG.checked);
-  srcG.onchange();
-  $("#gkFile").onchange = async (e) => {
-    const fs = [...e.target.files]; if (!fs.length) return;
-    const txt = (await Promise.all(fs.map((f) => f.text()))).join("\n\n");
-    const box = $("#gkText"); box.value = (box.value.trim() ? box.value.trim() + "\n\n" : "") + txt;
-    $("#gkInfo").textContent = `${splitPgn(box.value).length} games ready`;
-  };
-  $("#gkText").oninput = () => { $("#gkInfo").textContent = `${splitPgn($("#gkText").value).length} games ready`; };
   $("#pgnFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#pgnText").value = await f.text(); };
   $("#go").onclick = () => runImport(v);
   const pq = loadQueue();
@@ -223,16 +205,6 @@ async function fetchGames(p, opts, status) {
       }
     }
   }
-  if (opts.gameknot) {
-    const pgns = splitPgn($("#gkText").value);
-    if (!pgns.length) throw new Error("GameKnot: paste the PGN or choose the downloaded .pgn file(s) first (GameKnot can't be fetched directly).");
-    const fallback = mostFrequentName(pgns);
-    const hasName = (pgn, n) => n && new RegExp(`\\[(White|Black) "${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "i").test(pgn);
-    for (const pgn of pgns) {
-      const name = hasName(pgn, p.gameknot) ? p.gameknot : fallback;
-      out.push({ pgn: /\[Site "/.test(pgn) ? pgn : `[Site "GameKnot"]\n` + pgn, name, src: "gameknot" });
-    }
-  }
   if (opts.pgn) {
     const pgns = splitPgn($("#pgnText").value);
     let name = $("#pgnName").value.trim();
@@ -272,13 +244,13 @@ function jobDone(text) {
 async function runImport(v) {
   const p = P();
   if (running) return toast("An analysis is already running");
-  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, gameknot: $("#srcG").checked, corr: $("#corr").checked, pgn: $("#srcP").checked, months: +$("#months").value, mintc: +$("#mintc").value, num: +$("#num").value || 100 };
+  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, corr: $("#corr").checked, pgn: $("#srcP").checked, months: +$("#months").value, mintc: +$("#mintc").value, num: +$("#num").value || 100 };
   const movetime = +$("#speed").value;
   const re = $("#reanalyse").checked;
-  const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.gameknot && "GameKnot", opts.pgn && "PGN"].filter(Boolean).join(" + ");
+  const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.pgn && "PGN"].filter(Boolean).join(" + ");
   $("#prog").classList.remove("hidden"); $("#go").disabled = true;
   try {
-    if (!opts.lichess && !opts.chesscom && !opts.gameknot && !opts.pgn) throw new Error("Choose at least one source.");
+    if (!opts.lichess && !opts.chesscom && !opts.pgn) throw new Error("Choose at least one source.");
     const list = await fetchGames(p, opts, (t) => ($("#progText").textContent = t));
     if (!list.length) throw new Error("No games found for this period and time control.");
     const items = list.filter((x) => re || !p.games[gameKey(x.pgn)]);

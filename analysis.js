@@ -28,7 +28,7 @@ export function endgameType(fen) {
 export function classify(drop) { return drop >= 15 ? "blunder" : drop >= 10 ? "mistake" : drop >= 5 ? "inaccuracy" : null; }
 function parseTc(tc) { const m = /^(\d+)(?:\+(\d+))?/.exec(tc || ""); return m ? [+m[1], +(m[2] || 0)] : [null, null]; }
 export function isCorrespondence(tc, site) {
-  return /gameknot|correspondence|iccf|schemingmind|lechenicher/i.test(site || "") || tc === "-" || /^\d+\/\d+$/.test(tc || "") || /^1\/\d+/.test(tc || "");
+  return /correspondence|iccf|schemingmind|lechenicher/i.test(site || "") || tc === "-" || /^\d+\/\d+$/.test(tc || "") || /^1\/\d+/.test(tc || "");
 }
 // Stable id per game: the URL when the PGN has one, otherwise players + date + a hash of the moves
 export function gameKey(pgn) {
