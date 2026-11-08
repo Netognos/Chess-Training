@@ -5,6 +5,7 @@ import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey } from ".
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
+import { LineBuilder, checkLine, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo } from "./test.js";
 
@@ -471,41 +472,53 @@ function puzzles(v) {
   const due = all.filter((x) => !x.due || x.due <= today()).sort((a, b) => (a.box || 0) - (b.box || 0) || b.drop - a.drop);
   if (!all.length) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>Analyse games first: your biggest mistakes become puzzles here.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   const known = all.filter((x) => (x.box || 0) >= 4).length;
-  v.innerHTML = `<div class="two"><div><div id="pb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
+  v.innerHTML = `<div class="two"><div><div id="pb"></div><div id="plb"></div><div class="row" style="margin-top:8px"><button class="btn" id="pCheck">Check my lines</button></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
     <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button><button class="btn secondary" id="pWhy">Explain the solution</button></div>
     <div id="pWhyOut"></div>
     <div class="card hidden" id="pReadOut" style="margin-top:12px"></div><div class="card hidden" id="pSheetOut" style="margin-top:12px"></div></div>
     <div><div class="card"><h2>Your mistakes as puzzles</h2><div class="small muted">${due.length} due · ${all.length} total · ${known} known</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
-    <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
+    <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Put your move <b>and the line you expect</b> on the board: the pieces stay where they are, every move is written down. A move for the other side starts an extra line (another defence or another idea). Press <b>Check my lines</b> and Stockfish judges your main line (★) and the extra lines. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
   const brd = new Board($("#pb"), { orientation: "w" });
-  let cur = null, idx = 0, solved = false, tries = 0;
+  let cur = null, idx = 0, solved = false, tries = 0, lb = null;
+  const lock = () => { if (lb) { lb.destroy(); lb = null; $("#plb").innerHTML = ""; } brd.locked = true; $("#pCheck").disabled = true; };
   const show = () => {
     cur = due[idx]; solved = false; tries = 0; $("#pfb").innerHTML = "";
-    if (!cur) { $("#pinfo").innerHTML = `<div class="feedback ok">No more puzzles due today. Well done! Come back tomorrow, or practise endgames.</div>`; brd.locked = true; return; }
+    if (!cur) { $("#pinfo").innerHTML = `<div class="feedback ok">No more puzzles due today. Well done! Come back tomorrow, or practise endgames.</div>`; lock(); return; }
     brd.locked = false; brd.setFen(cur.fen); brd.setOrientation(cur.fen.split(" ")[1]);
+    if (lb) lb.destroy();
+    lb = new LineBuilder({ board: brd, rootFen: cur.fen, el: $("#plb"), esc }); $("#pCheck").disabled = false;
     const side = cur.fen.split(" ")[1] === "w" ? "White" : "Black";
     $("#pinfo").innerHTML = `<b>Move ${cur.moveNo}, you're ${side}</b> (${esc(cur.phase)}). Eval before your move: ${cur.evalBefore > 0 ? "+" : ""}${cur.evalBefore}.<br><span class="small muted">${cur.played === "?" ? "Your own position: find the best move." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}. Find a better move.`}</span>`;
     $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden"); $("#pWhyOut").innerHTML = "";
   };
-  brd.onMove = async (mv, before) => {
-    if (!cur || solved) return;
-    brd.locked = true; tries++;
-    $("#pfb").innerHTML = `<div class="feedback info">Checking…</div>`;
-    const g = await gradeMove(before, mv.lan || mv.from + mv.to + (mv.promotion || ""));
-    const ok = g.drop < 5 || mv.san === cur.best;
-    if (ok) {
-      solved = true; if (tries === 1) srs(cur, true); else srs(cur, false);
-      $("#pfb").innerHTML = `<div class="feedback ok"><b>${esc(mv.san)}: correct!</b> ${tries > 1 ? "(on attempt " + tries + ")" : ""}<br><span class="small">Engine line: ${esc(g.bestLine)}</span></div>${tagHelp(cur)}`;
-      logEvent("puzzle", `Puzzle (move ${cur.moveNo}) ${tries === 1 ? "solved" : "solved on attempt " + tries}`);
-    } else {
-      $("#pfb").innerHTML = `<div class="feedback no"><b>${esc(mv.san)}</b> isn't it (you lose ${g.drop.toFixed(0)}% win chance: ${esc(g.verdict)}). ${tries < 2 ? "Try again." : "Look at the solution."}</div>`;
-      setTimeout(() => { brd.setFen(before); brd.locked = false; }, 900);
-      if (tries >= 2) { srs(cur, false); solved = true; logEvent("puzzle", `Puzzle (move ${cur.moveNo}) not solved`); }
+  $("#pCheck").onclick = async () => {
+    if (!cur || solved || !lb) return;
+    const main = lb.lines[lb.main];
+    if (!main || !main.moves.length) { $("#pfb").innerHTML = `<div class="feedback info">Put at least your first move on the board.</div>`; return; }
+    const btn = $("#pCheck"); btn.disabled = true; tries++;
+    $("#pfb").innerHTML = `<div class="feedback info">Stockfish is checking your lines…</div>`;
+    const first = main.moves[0];
+    const g = await gradeMove(cur.fen, first.uci);
+    const ok = g.drop < 5 || first.san === cur.best;
+    const notes = [];
+    for (const [i, l] of lb.lines.entries()) {
+      if (!l.moves.length || (i === lb.main && l.moves.length < 2)) continue;
+      const r = await checkLine(gradeMove, cur.fen, l.moves, { ms: 400, maxPlies: 8 });
+      notes.push(`<li><b>${i === lb.main ? "Main line" : "Line " + (i + 1)}</b> <span class="muted">${esc(fmtLine(cur.fen, l.moves))}</span>: ${r.holds ? "holds up ✓" : r.stopped !== null ? "breaks down" : "partly OK"}<br><span class="small">${esc(r.notes.join(" · "))}</span></li>`);
     }
-    save(); brd.locked = solved;
+    const lineHtml = notes.length ? `<ul class="small" style="margin-top:6px">${notes.join("")}</ul>` : "";
+    if (ok) {
+      solved = true; srs(cur, tries === 1);
+      $("#pfb").innerHTML = `<div class="feedback ok"><b>${esc(first.san)}: correct!</b> ${tries > 1 ? "(on attempt " + tries + ")" : ""}<br><span class="small">Engine line: ${esc(g.bestLine)}</span>${lineHtml}</div>${tagHelp(cur)}`;
+      logEvent("puzzle", `Puzzle (move ${cur.moveNo}) ${tries === 1 ? "solved" : "solved on attempt " + tries}`); lock();
+    } else {
+      $("#pfb").innerHTML = `<div class="feedback no"><b>${esc(first.san)}</b> isn't it (you lose ${g.drop.toFixed(0)}% win chance: ${esc(g.verdict)}). ${tries < 2 ? "Change your lines and check again." : "Look at the solution."}${lineHtml}</div>`;
+      if (tries >= 2) { srs(cur, false); solved = true; logEvent("puzzle", `Puzzle (move ${cur.moveNo}) not solved`); lock(); } else btn.disabled = false;
+    }
+    save();
   };
   $("#hint").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); $("#pfb").innerHTML = `<div class="feedback info">Hint: look at your ${pieceName(m.piece)}${m.captured ? " (it can capture something)" : ""}${m.san.includes("+") ? ", with check" : ""}.</div>`; };
-  $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
+  $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); lock(); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
   $("#explore").onclick = () => cur && go("board", { fen: cur.fen });
   $("#next").onclick = () => { idx++; show(); };
   $("#pWhy").onclick = async () => {
@@ -513,7 +526,7 @@ function puzzles(v) {
     out.innerHTML = `<div class="feedback info small">Stockfish is working out why ${esc(cur.best)} is the move…</div>`;
     const sheet = $("#pSheetOut"); const notes = sheet && !sheet.classList.contains("hidden") ? [...sheet.querySelectorAll("textarea, input")].map((x) => x.value).join(" ") : "";
     try { out.innerHTML = explainHtml(await explainMove(getEngine(), cur.fen, m.from + m.to + (m.promotion || ""), notes, ""), esc); } catch (e) { out.innerHTML = ""; console.warn(e); }
-    if (!solved) { srs(cur, false); save(); solved = true; brd.locked = true; }
+    if (!solved) { srs(cur, false); save(); solved = true; lock(); }
   };
   $("#pRead").onclick = () => { if (!cur) return; const o = $("#pReadOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) o.innerHTML = `<h2>Read the position</h2>` + readerHtml(cur.fen); };
   $("#pSheet").onclick = () => { if (!cur) return; const o = $("#pSheetOut"); o.classList.toggle("hidden"); if (!o.classList.contains("hidden")) thinkSheet(o, () => cur.fen, { source: "puzzle", title: `Puzzle: move ${cur.moveNo}${cur.game ? " (" + cur.game.split("/").pop() + ")" : ""}` }); };

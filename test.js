@@ -1,6 +1,7 @@
 // TEST & PROFILE: adaptive position test (move + why), calculation depth, time, style,
 // player type (Lars Bo Hansen model) and a combined player profile.
 import { Chess } from "./vendor/chess.js";
+import { LineBuilder, checkLine, fmt as fmtLine } from "./lines.js";
 import { Board } from "./board.js";
 import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
 import { explainMove, explainHtml } from "./explain.js";
@@ -177,15 +178,15 @@ async function runItem(v, cur, C, opts) {
   const solSan = (() => { const c = new Chess(fen); const o = []; for (const u of sol) { try { o.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } } return o; })();
   const nMine = Math.ceil(sol.length / 2);
   const themes = (it.c ? [it.c] : []).concat(it.t || it.th || []);
-  v.innerHTML = `<div class="two"><div><div id="tb"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
+  v.innerHTML = `<div class="two"><div><div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
     <div><div class="card"><h2>${opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${C.esc(catLabel(opts.cat))}`}</h2>
       <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
-      <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Don't play on the board: write down your idea and the <b>whole line</b> you see, as far as you can calculate it." : "There's no direct tactic. Write down your move and the idea or plan behind it."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
+      <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Put the <b>whole line</b> you see on the board (the pieces don't move: each move is written down) or type it, plus your idea. Extra lines for other defences or other ideas are checked too." : "There's no direct tactic. Play your move on the board (or type it) and write down the idea or plan behind it. Other candidate moves can go in extra lines."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
       <div class="small" style="margin:6px 0">AI coach: ${aiKey() ? "<b>on</b>" : "<b>off</b>"} · <a href="#" id="aiToggle">${aiKey() ? "settings" : "set up (free)"}</a></div><div id="aiInline" class="card hidden"></div>
       <div id="stage"></div><div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
   v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
-  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null;
+  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [];
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
@@ -200,6 +201,7 @@ async function runItem(v, cur, C, opts) {
 
   const finish = async (note) => {
     if (finished) return; finished = true; clearInterval(timer);
+    if (lb) { lb.destroy(); lb = null; v.querySelector("#lbox").innerHTML = ""; } brd.locked = true;
     let base;
     if (slot.kind === "pos") base = moveScore ?? 0;
     else base = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
@@ -215,13 +217,13 @@ async function runItem(v, cur, C, opts) {
         ai = await judgeReasoning({ fen, side: stm === "w" ? "White" : "Black", category: catLabel(slot.cat), rating: it.r, solution: solSan.join(" "),
           engineLine: x.facts.find((f) => f.includes("Main line")) || solSan.join(" "), evalText: `${x.san} ${(x.bestCp / 100).toFixed(1)} for the player`,
           alternatives: x.alts.map((a) => `${a.san} ${(a.cp / 100).toFixed(1)}`).join(", ") || "-", rubric: rubricFrom(x, solSan.join(" ")),
-          userMove: firstMove, userLine: lineTxt, userNotes: ideaTxt });
+          userMove: firstMove, userLine: lineTxt + (sideTxt.length ? " || Other lines the player considered: " + sideTxt.join(" ; ") : ""), userNotes: ideaTxt });
       } catch (e) { aiErr = e.message || String(e); console.warn(e); }
     }
     let score = base;
     if (ai) { score = 0.5 * base + 0.5 * ai.understanding; if (base < 0.5 && ai.rejected) score = Math.max(score, 0.45); }
     const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, moveScore: base, depth: depthStart ?? 0, depthTotal, stages, nMine,
-      timeMs: (tSubmit || Date.now()) - t0, totalMs: Date.now() - t0, move: firstMove, character, why: ideaTxt, line: lineTxt, plannedMatch: depthStart ?? 0,
+      timeMs: (tSubmit || Date.now()) - t0, totalMs: Date.now() - t0, move: firstMove, character, why: ideaTxt, line: lineTxt, sideLines: sideTxt, plannedMatch: depthStart ?? 0,
       solution: solSan.join(" "), themes, notes: allNotes, url: it.url || (it.c ? `https://lichess.org/training/${it.id}` : ""),
       explain: x ? { saw: x.conceptCheck.filter((c) => c.hit).map((c) => c.label), missed: x.conceptCheck.filter((c) => !c.hit).map((c) => c.label) } : null,
       ai: ai ? { idea: ai.levels.idea.credit, danger: ai.levels.danger.credit, followup: ai.levels.followup.credit, rejected: ai.rejected, feedback: ai.feedback, missed: ai.missed } : null };
@@ -261,7 +263,10 @@ async function runItem(v, cur, C, opts) {
       <div id="perr" class="small" style="color:var(--bad);margin-top:4px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit answer</button><button class="btn secondary" id="skip">${first ? "I don't know / skip" : "Show solution"}</button></div>`;
     const inp = v.querySelector("#line");
-    inp.focus({ preventScroll: true });
+    if (lb) lb.destroy();
+    brd.locked = false;
+    lb = new LineBuilder({ board: brd, rootFen: sfen, el: v.querySelector("#lbox"), esc: C.esc, onChange: () => { if (!inp.dataset.manual) inp.value = lb.mainSan(); } });
+    inp.oninput = () => { if (inp.value.trim()) inp.dataset.manual = "1"; else delete inp.dataset.manual; };
     inp.onkeydown = (e) => { if (e.key === "Enter") v.querySelector("#submit").click(); };
     v.querySelector("#skip").onclick = () => finish(first ? "Skipped." : `You found ${depthTotal} of ${nMine} moves.`);
     v.querySelector("#submit").onclick = async () => {
@@ -269,6 +274,16 @@ async function runItem(v, cur, C, opts) {
       if (!txt) { v.querySelector("#perr").textContent = "Write down at least your first move."; return; }
       const parsed = parseLine(sfen, txt);
       if (parsed.error) { v.querySelector("#perr").textContent = `"${parsed.error.token}" (move ${parsed.error.index + 1} of your line) is not a legal move${parsed.error.index ? " after the moves before it" : " in this position"}. Fix it and submit again; this doesn't count as a mistake.`; return; }
+      const sides = lb ? lb.sideLines() : [];
+      if (sides.length) {
+        v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your ${sides.length} extra line${sides.length > 1 ? "s" : ""}…</div>`;
+        for (const s of sides.slice(0, 4)) {
+          const r = await checkLine(C.gradeMove, sfen, s.moves, { ms: 350, maxPlies: 6 });
+          const t = fmtLine(sfen, s.moves); sideTxt.push(t);
+          allNotes.push(`Line ${s.i + 1} (${t}): ${r.holds ? "holds up" : r.stopped !== null ? "breaks down" : "partly OK"}. ${r.notes.join(" · ")}`);
+        }
+        v.querySelector("#submit").disabled = false;
+      }
       if (first) { tSubmit = Date.now(); ideaTxt = v.querySelector("#why").value; lineTxt = txt; const m0 = new Chess(fen).move(parsed.moves[0].san); firstMove = m0.san; character = moveCharacter(fen, m0); }
       else lineTxt += " | " + txt;
       v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your line…</div>`; scrollFb();

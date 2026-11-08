@@ -9,6 +9,8 @@ export class Board {
   constructor(el, { orientation = "w", interactive = true, onMove = null } = {}) {
     this.el = el; this.orientation = orientation; this.interactive = interactive; this.onMove = onMove;
     this.chess = new Chess(); this.sel = null; this.last = null; this.arrows = []; this.locked = false;
+    // intercept mode: moves are handed to intercept(from, to, promo) instead of being played; targetsFor(sq) gives the dots
+    this.intercept = null; this.targetsFor = null;
     el.classList.add("board");
     el.innerHTML = "";
     this.grid = document.createElement("div"); this.grid.className = "grid"; el.appendChild(this.grid);
@@ -40,7 +42,7 @@ export class Board {
 
   render() {
     const kids = this.grid.children;
-    const targets = this.sel ? this.chess.moves({ square: this.sel, verbose: true }).map((m) => m.to) : [];
+    const targets = !this.sel ? [] : this.targetsFor ? this.targetsFor(this.sel) : this.chess.moves({ square: this.sel, verbose: true }).map((m) => m.to);
     const checkSq = this.chess.inCheck() ? this._kingSq(this.chess.turn()) : null;
     for (let i = 0; i < 64; i++) {
       const sq = this._sqAt(i), d = kids[i];
@@ -77,6 +79,11 @@ export class Board {
     if (!this.interactive || this.locked) return;
     const t = e.target.closest(".sq"); if (!t) return;
     const sq = t.dataset.sq, p = this.chess.get(sq);
+    if (this.intercept) {
+      if (this.sel && this.sel !== sq && (!this.targetsFor || this.targetsFor(this.sel).includes(sq))) { this._attempt(this.sel, sq); return; }
+      if (p) { this.sel = sq; this.render(); this._startDrag(e, sq, t); } else { this.sel = null; this.render(); }
+      return;
+    }
     if (this.sel && this.sel !== sq) {
       const ok = this.chess.moves({ square: this.sel, verbose: true }).some((m) => m.to === sq);
       if (ok) { this._attempt(this.sel, sq); return; }
@@ -105,6 +112,12 @@ export class Board {
   }
 
   async _attempt(from, to) {
+    if (this.intercept) {
+      const p = this.chess.get(from); let promo;
+      if (p && p.type === "p" && (to[1] === "8" || to[1] === "1")) promo = await this._askPromo(p.color);
+      this.sel = null; this.render();
+      this.intercept(from, to, promo); return;
+    }
     const legal = this.chess.moves({ square: from, verbose: true }).filter((m) => m.to === to);
     if (!legal.length) { this.sel = null; this.render(); return; }
     let promotion;
