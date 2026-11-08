@@ -5,7 +5,7 @@ import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey } from ".
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
-import { LineBuilder, checkLine, fmt as fmtLine } from "./lines.js";
+import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo } from "./test.js";
 
@@ -500,13 +500,15 @@ function puzzles(v) {
     const first = main.moves[0];
     const g = await gradeMove(cur.fen, first.uci);
     const ok = g.drop < 5 || first.san === cur.best;
-    const notes = [];
-    for (const [i, l] of lb.lines.entries()) {
-      if (!l.moves.length || (i === lb.main && l.moves.length < 2)) continue;
-      const r = await checkLine(gradeMove, cur.fen, l.moves, { ms: 400, maxPlies: 8 });
-      notes.push(`<li><b>${i === lb.main ? "Main line" : "Line " + (i + 1)}</b> <span class="muted">${esc(fmtLine(cur.fen, l.moves))}</span>: ${r.holds ? "holds up ✓" : r.stopped !== null ? "breaks down" : "partly OK"}<br><span class="small">${esc(r.notes.join(" · "))}</span></li>`);
+    let lineHtml = "";
+    if (main.moves.length >= 2) {
+      const r = await checkLine(gradeMove, cur.fen, main.moves, { ms: 400, maxPlies: 8 });
+      lineHtml += `<p class="small" style="margin-top:6px"><b>Your main line</b> ${esc(fmtLine(cur.fen, main.moves))}: ${r.stopped !== null ? "breaks down" : r.holds ? "holds up ✓" : "partly OK"}<br>${esc(r.notes.join(" · "))}</p>`;
     }
-    const lineHtml = notes.length ? `<ul class="small" style="margin-top:6px">${notes.join("")}</ul>` : "";
+    const sides = lb.sideLines();
+    if (sides.length || main.moves.length) {
+      try { const rep = await sideReport({ gradeMove, eng: getEngine(), root: cur.fen, main: main.moves, sides, ms: 400 }); lineHtml += sideReportHtml(rep, esc, cur.fen, main.moves); } catch (e) { console.warn(e); }
+    }
     if (ok) {
       solved = true; srs(cur, tries === 1);
       $("#pfb").innerHTML = `<div class="feedback ok"><b>${esc(first.san)}: correct!</b> ${tries > 1 ? "(on attempt " + tries + ")" : ""}<br><span class="small">Engine line: ${esc(g.bestLine)}</span>${lineHtml}</div>${tagHelp(cur)}`;

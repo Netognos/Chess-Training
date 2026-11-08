@@ -1,7 +1,7 @@
 // TEST & PROFILE: adaptive position test (move + why), calculation depth, time, style,
 // player type (Lars Bo Hansen model) and a combined player profile.
 import { Chess } from "./vendor/chess.js";
-import { LineBuilder, checkLine, fmt as fmtLine } from "./lines.js";
+import { LineBuilder, sideReport, sideReportHtml } from "./lines.js";
 import { Board } from "./board.js";
 import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
 import { explainMove, explainHtml } from "./explain.js";
@@ -226,7 +226,7 @@ async function runItem(v, cur, C, opts) {
   let aiPromise = null, calc = null;
   const Cg = { ...C, gradeMove: (f, u, ms) => gradeWith(ceng, f, u, ms) }; window.__ccEng = ceng;
   v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
-  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [];
+  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [], sideHtml = "", sideHold = 0;
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
@@ -252,6 +252,8 @@ async function runItem(v, cur, C, opts) {
     const useAI = !!aiKey() && !!(ideaTxt || lineTxt);
     v.querySelector("#tfb").innerHTML = `<div class="feedback info">${C.esc(note)}<br><span class="small">Stockfish is working out why ${C.esc(solSan[0])} is the move${useAI ? ", and the AI coach is reading your reasoning" : ""}…</span></div>`;
     scrollFb();
+    // extra lines where your idea holds against another defence: small bonus
+    if (sideHold && base > 0) base = Math.min(1, base + Math.min(0.15, 0.05 * sideHold));
     let x = null, ai = null, aiErr = null;
     if (aiPromise) { const r = await aiPromise; x = r.x; ai = r.ai; aiErr = r.aiErr; }
     else { try { x = await explainMove(ceng, fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); } }
@@ -278,8 +280,9 @@ async function runItem(v, cur, C, opts) {
         ${ai.rejected ? `<p class="small"><b>Half right:</b> you didn't play the move, but you rejected it for the real danger.</p>` : ""}
         <p class="small">${C.esc(ai.feedback)}</p>${ai.missed ? `<p class="small"><b>Most important thing you missed:</b> ${C.esc(ai.missed)}</p>` : ""}</div>`
         : aiErr ? `<div class="feedback no small">AI coach unavailable: ${C.esc(aiErr)}</div>` : !aiKey() && (ideaTxt || lineTxt) ? `<p class="small muted">Tip: add a free Gemini key on the Test start page, and the AI coach will judge your reasoning (idea, danger, follow-up).</p>` : ""}
+      ${sideHtml}
       ${explainHtml(x, C.esc)}
-      <p class="small muted">How the score works: your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%.</p>
+      <p class="small muted">How the score works: your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%. Each extra line where your idea holds against another defence adds 5% (max 15%); a wrong first move with accurate calculation after it can still earn up to 40%.</p>
       <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button></div>`;
     stepper(solSan, fen);
     v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
@@ -320,11 +323,12 @@ async function runItem(v, cur, C, opts) {
       const sides = lb ? lb.sideLines() : [];
       if (sides.length) {
         v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your ${sides.length} extra line${sides.length > 1 ? "s" : ""}…</div>`;
-        for (const s of sides.slice(0, 4)) {
-          const r = await checkLine(Cg.gradeMove, sfen, s.moves, { ms: 350, maxPlies: 6 });
-          const t = fmtLine(sfen, s.moves); sideTxt.push(t);
-          allNotes.push(`Line ${s.i + 1} (${t}): ${r.holds ? "holds up" : r.stopped !== null ? "breaks down" : "partly OK"}. ${r.notes.join(" · ")}`);
-        }
+        const mm = lb.mainMoves().length ? lb.mainMoves() : parsed.moves;
+        try {
+          const rep = await sideReport({ gradeMove: Cg.gradeMove, eng: ceng, root: sfen, main: mm, sides, ms: 400 });
+          sideHtml += sideReportHtml(rep, C.esc, sfen, mm);
+          for (const it of rep.items) { sideTxt.push(`${it.title}: ${it.text} → ${it.verdict}`); if (it.holds && it.kind === "defence") sideHold++; }
+        } catch (err) { console.warn(err); }
         v.querySelector("#submit").disabled = false;
       }
       if (first) {

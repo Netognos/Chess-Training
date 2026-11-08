@@ -1,13 +1,14 @@
 // Line builder: you drag moves on the board, but the pieces stay put. Each move is written into a line;
 // a move for the side that isn't to move starts a new (side) line from the latest point where it fits.
 import { Chess } from "./vendor/chess.js";
+import { lineToCp, winPct } from "./engine.js";
 
 const posAt = (root, moves, n) => { const c = new Chess(root); for (const m of moves.slice(0, n)) c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] }); return c; };
 
 export class LineBuilder {
   constructor({ board, rootFen, el, esc, onChange = () => {}, maxLines = 6 }) {
     this.board = board; this.root = rootFen; this.el = el; this.esc = esc; this.onChange = onChange; this.maxLines = maxLines;
-    this.lines = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
+    this.lines = []; this.hist = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
     board.intercept = (f, t, p) => this.move(f, t, p);
     board.targetsFor = (sq) => this.targets(sq);
     this.render();
@@ -38,26 +39,37 @@ export class LineBuilder {
     const mv = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     const prefix = this.line ? this.line.moves.slice(0, r.k) : [];
     this.msg = "";
-    if (this.line && r.k === this.line.moves.length) { this.line.moves.push(mv); this.cursor = this.line.moves.length; }
+    if (this.line && r.k === this.line.moves.length) { this.line.moves.push(mv); this.cursor = this.line.moves.length; this.hist.push({ line: this.lines[this.cur], created: false }); }
     else if (this.line && this.line.moves[r.k]?.uci === mv.uci) { this.cursor = r.k + 1; }
     else {
       const nm = prefix.concat([mv]);
       const same = this.lines.findIndex((l) => nm.every((x, i) => l.moves[i]?.uci === x.uci));
       if (same >= 0) { this.cur = same; this.cursor = nm.length; }
       else if (this.lines.length >= this.maxLines) { this.msg = `Maximum ${this.maxLines} lines. Delete one first.`; }
-      else { this.lines.push({ moves: nm, from: this.line && r.k > 0 ? this.cur : null, at: r.k }); this.cur = this.lines.length - 1; this.cursor = nm.length; }
+      else { const nl = { moves: nm }; this.lines.push(nl); this.cur = this.lines.length - 1; this.cursor = nm.length; this.hist.push({ line: nl, created: true }); }
     }
     this.render(); this.onChange();
   }
-  undo() { const l = this.line; if (!l) return; l.moves.pop(); this.cursor = l.moves.length; if (!l.moves.length) this.del(this.cur); else { this.render(); this.onChange(); } }
+  // undo = take back the last move you made, in the order you made them (whatever line it was in)
+  undo() {
+    const h = this.hist.pop(); if (!h) return;
+    const i = this.lines.indexOf(h.line); if (i < 0) return this.undo();
+    if (h.created) { this.lines.splice(i, 1); if (this.main === i) this.main = 0; else if (this.main > i) this.main--; }
+    else h.line.moves.pop();
+    const prev = this.hist.length ? this.lines.indexOf(this.hist[this.hist.length - 1].line) : -1;
+    this.cur = h.created ? (prev >= 0 ? prev : this.lines.length - 1) : i; this.cursor = this.line ? this.line.moves.length : 0;
+    this.msg = ""; this.render(); this.onChange();
+  }
   del(i) {
+    const gone = this.lines[i]; this.hist = this.hist.filter((h) => h.line !== gone);
     this.lines.splice(i, 1); if (this.main === i) this.main = 0; else if (this.main > i) this.main--;
     this.cur = Math.min(this.cur, this.lines.length - 1); this.cursor = this.line ? this.line.moves.length : 0; this.render(); this.onChange();
   }
-  clear() { this.lines = []; this.cur = -1; this.cursor = 0; this.main = 0; this.render(); this.onChange(); }
+  clear() { this.hist = []; this.lines = []; this.cur = -1; this.cursor = 0; this.main = 0; this.render(); this.onChange(); }
   // what the text fields want: main line + side lines as SAN strings
   mainSan() { const l = this.lines[this.main]; return l ? l.moves.map((m) => m.san).join(" ") : ""; }
-  sideLines() { return this.lines.map((l, i) => ({ i, moves: l.moves })).filter((x) => x.i !== this.main && x.moves.length); }
+  mainMoves() { return this.lines[this.main]?.moves || []; }
+  sideLines() { const mm = this.mainMoves(); return this.lines.map((l, i) => ({ i, moves: l.moves, branch: branchAt(mm, l.moves) })).filter((x) => x.i !== this.main && x.moves.length); }
   text() { return this.lines.map((l, i) => `${i === this.main ? "Main" : "Line " + (i + 1)}: ${fmt(this.root, l.moves)}`).join("\n"); }
   _boardView() {
     const l = this.line;
@@ -84,7 +96,7 @@ export class LineBuilder {
       <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: each move is written down here as a line, and nothing is played against you. Then play the opponent's reply, and so on. A move for the side that isn't to move starts a second line. Untick “Show line on board” to keep the starting position on the board, with arrows."}</div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
-      <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.line ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
+      <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.hist.length ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
         <button class="btn secondary small" data-act="start" ${this.line && this.cursor ? "" : "disabled"}>⏮ Start</button><label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Show line on board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
     this.el.querySelectorAll(".lbm").forEach((a) => (a.onclick = (e) => { e.preventDefault(); this.cur = +a.dataset.l; this.cursor = +a.dataset.p; this.render(); }));
     this.el.querySelectorAll("[data-sel]").forEach((a) => (a.onclick = () => { this.cur = +a.dataset.sel; this.cursor = this.line.moves.length; this.render(); }));
@@ -105,25 +117,78 @@ function fmtTokens(root, moves) {
 }
 export const fmt = (root, moves) => fmtTokens(root, moves).map((t) => (t.no ? t.no + " " : "") + t.san).join(" ").replace(/\. /g, ".").replace(/… /g, "…");
 
-// Engine check of a line: your moves (side to move at the root) vs the best move, the opponent's replies vs their best defence.
-// gradeMove(fen, uci, ms) → { drop, bestLine }.
-export async function checkLine(gradeMove, root, moves, { ms = 500, maxPlies = 8, label = "" } = {}) {
-  const c = new Chess(root); const out = []; let holds = true, stopped = null;
-  for (const [k, m] of moves.slice(0, maxPlies).entries()) {
-    const fen = c.fen(); const mine = k % 2 === 0;
-    const test = new Chess(fen); test.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] });
-    if (test.isCheckmate()) { out.push(`${m.san}: mate.`); c.move(m.san); break; }
-    const g = await gradeMove(fen, m.uci, ms);
-    const best = (g.bestLine || "").split(" ")[0];
+export const branchAt = (main, moves) => { let b = 0; while (b < moves.length && b < main.length && main[b].uci === moves[b].uci) b++; return b; };
+
+// Engine check of an extra line from the point where it leaves the main line (ply `from`).
+// A different move of yours there = another idea; a different opponent move = another defence: is it a real defence,
+// and does your answer to it hold? If the line stops after their move, the engine's answer is given.
+// gradeMove(fen, uci, ms) → { drop, bestLine, afterCp }; eng.analyse for the missing answer.
+export async function checkLine(gradeMove, root, moves, { ms = 500, maxPlies = 10, from = 0, eng = null } = {}) {
+  const c = new Chess(root); const me = c.turn(); const notes = []; let holds = true, stopped = null, endCp = null, answer = null;
+  for (const m of moves.slice(0, from)) c.move(m.san);
+  const kind = from % 2 === 0 ? "idea" : "defence";
+  const end = Math.min(moves.length, from + maxPlies);
+  for (let k = from; k < end; k++) {
+    const m = moves[k]; const fen = c.fen(); const mine = k % 2 === 0;
+    const test = new Chess(fen); test.move(m.san);
+    if (test.isCheckmate()) { notes.push(`${m.san}: mate.`); c.move(m.san); endCp = mine ? 10000 : -10000; break; }
+    const g = await gradeMove(fen, m.uci, ms); const best = (g.bestLine || "").split(" ")[0];
     if (mine) {
-      if (g.drop < 4) out.push(`${m.san} ✓`);
-      else if (g.drop < 10) { out.push(`${m.san}: playable but weaker (−${g.drop.toFixed(0)}%), better ${best}`); holds = false; }
-      else { out.push(`${m.san}: goes wrong (−${g.drop.toFixed(0)}%), better ${best}`); holds = false; stopped = k; break; }
+      endCp = g.afterCp;
+      if (g.drop < 4) notes.push(`${m.san} ✓`);
+      else if (g.drop < 10) { notes.push(`${m.san}: playable but weaker (−${g.drop.toFixed(0)}%), better ${best}`); holds = false; }
+      else { notes.push(`${m.san}: goes wrong (−${g.drop.toFixed(0)}%), better ${best}`); holds = false; stopped = k; c.move(m.san); break; }
     } else {
-      if (g.drop < 5) out.push(`${m.san} (a good defence)`);
-      else out.push(`${m.san}: not their best defence; ${best} is stronger for them`);
+      endCp = -g.afterCp;
+      notes.push(g.drop < 5 ? `${m.san}: a real defence` : `${m.san}: a weaker defence (${best} is better for them)`);
     }
     c.move(m.san);
   }
-  return { label, holds, stopped, notes: out, endFen: c.fen() };
+  // their move was the last one in your line: what would you answer?
+  if (stopped === null && !c.isGameOver() && c.turn() === me && eng) {
+    const [b] = await eng.analyse(c.fen(), { movetime: ms });
+    if (b?.pv[0]) { const t = new Chess(c.fen()); const x = t.move({ from: b.pv[0].slice(0, 2), to: b.pv[0].slice(2, 4), promotion: b.pv[0][4] }); answer = { san: x.san, cp: lineToCp(b) }; endCp = answer.cp; }
+  }
+  return { kind, holds, stopped, notes, endCp, answer };
+}
+
+const ev = (cp) => (cp == null ? "" : Math.abs(cp) >= 9000 ? (cp > 0 ? "mate" : "getting mated") : (cp >= 0 ? "+" : "") + (cp / 100).toFixed(1));
+const tok = (root, moves, k) => { const [, side, , , , n] = root.split(" "); const idx = k + (side === "b" ? 1 : 0); const no = (+n || 1) + Math.floor(idx / 2); return `${no}${idx % 2 ? "…" : "."}${moves[k].san}`; };
+
+// Check all extra lines against the main line + which serious defences after your first move you didn't cover.
+export async function sideReport({ gradeMove, eng, root, main, sides, ms = 400 }) {
+  const items = [];
+  for (const s of sides.slice(0, 5)) {
+    const from = Math.min(s.branch, s.moves.length - 1);
+    const r = await checkLine(gradeMove, root, s.moves, { ms, maxPlies: 8, from, eng });
+    const mv = s.moves[from], instead = main[from];
+    const title = r.kind === "defence" ? `If ${tok(root, s.moves, from)}${instead ? ` instead of ${instead.san}` : ""}` : `Other idea: ${tok(root, s.moves, from)}${instead ? ` instead of ${instead.san}` : ""}`;
+    let verdict, cls;
+    if (r.stopped !== null) { verdict = "✗ your plan doesn't hold here"; cls = "no"; }
+    else if (!r.holds) { verdict = "½ playable, but there is something better"; cls = "warn"; }
+    else if (r.answer) { verdict = `? you didn't give your answer. Best is ${r.answer.san} (${ev(r.answer.cp)})`; cls = "info"; }
+    else { verdict = `✓ holds${r.endCp != null ? ` (${ev(r.endCp)})` : ""}`; cls = "ok"; }
+    items.push({ line: s.i + 1, title, verdict, cls, notes: r.notes, kind: r.kind, holds: r.stopped === null && r.holds && !r.answer, san: mv.san, text: fmt(root, s.moves) });
+  }
+  // serious defences after your first move: are they all in your lines?
+  let coverage = null;
+  if (main.length && eng) {
+    const c = new Chess(root); c.move(main[0].san);
+    if (!c.isGameOver()) {
+      const rs = await eng.analyse(c.fen(), { movetime: 700, multipv: 3 });
+      const bestW = winPct(lineToCp(rs[0]));
+      const serious = rs.filter((l) => l.pv[0] && bestW - winPct(lineToCp(l)) < 10).map((l) => { const t = new Chess(c.fen()); return t.move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san; });
+      if (serious.length > 1) {
+        const allLines = [main, ...sides.map((s) => s.moves)];
+        coverage = serious.map((san) => ({ san, covered: allLines.some((l) => l[0]?.uci === main[0].uci && l[1]?.san === san) }));
+      }
+    }
+  }
+  return { items, coverage };
+}
+export function sideReportHtml(rep, esc, root, main) {
+  if (!rep || (!rep.items.length && !rep.coverage)) return "";
+  const cov = rep.coverage ? `<p class="small" style="margin:4px 0">Serious defences after ${esc(main[0].san)}: ${rep.coverage.map((d) => d.covered ? `<b>${esc(d.san)} ✓</b>` : `${esc(d.san)} <span class="muted">(not in your lines)</span>`).join(" · ")}</p>` : "";
+  return `<div class="card" style="margin-top:10px"><h3 style="margin-top:0">Your other lines</h3>${cov}
+    ${rep.items.map((it) => `<div class="feedback ${it.cls}" style="margin-top:6px"><b>Line ${it.line}: ${esc(it.title)}</b> → ${esc(it.verdict)}<br><span class="small muted">${esc(it.text)}</span><br><span class="small">${esc(it.notes.join(" · "))}</span></div>`).join("")}</div>`;
 }
