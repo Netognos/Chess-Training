@@ -63,10 +63,12 @@ export class LineBuilder {
     const l = this.line;
     if (this.follow && l) { const c = posAt(this.root, l.moves, this.cursor); const m = l.moves[this.cursor - 1]; this.board.setFen(c.fen(), { last: m ? [m.uci.slice(0, 2), m.uci.slice(2, 4)] : null }); }
     else { this.board.setFen(this.root); }
-    if (l) { // arrows: the next few moves of the selected line (yours green, the opponent's red)
-      const startPly = this.follow ? this.cursor : 0;
-      const arr = l.moves.slice(startPly, startPly + 4).map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: ((startPly + j) % 2 === 0) ? "#15781B" : "#B33A3A" }));
-      this.board.setArrows(arr);
+    if (l) { // arrows for the selected line: yours green, the opponent's red; the most recent move strongest
+      const from = this.follow ? this.cursor : 0, to = this.follow ? Math.min(l.moves.length, this.cursor + 4) : this.cursor;
+      const seg = l.moves.slice(Math.max(from, to - 10), to); const base = Math.max(from, to - 10);
+      this.board.setArrows(seg.map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (base + j) % 2 === 0 ? "#15781B" : "#B33A3A",
+        opacity: this.follow ? 0.8 : j === seg.length - 1 ? 0.95 : 0.35 + 0.4 * (j + 1) / seg.length, label: base + j + 1 })));
+      if (!this.follow && this.cursor) { const m = l.moves[this.cursor - 1]; this.board.last = [m.uci.slice(0, 2), m.uci.slice(2, 4)]; this.board.render(); }
     }
   }
   render() {
@@ -78,7 +80,7 @@ export class LineBuilder {
         <span class="lbno" data-sel="${i}">${i === this.main ? "Main" : "Line " + (i + 1)}</span><span class="lbmoves">${moves}</span><button class="lbdel" data-del="${i}" title="Delete line">✕</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted">${this.lines.length ? "Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: the pieces stay where they are and the move is written down here. Then play the opponent's reply, and so on. Play a different move for the same side to start a second line."}</div>
+      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: the pieces stay where they are and the move is written down here. Then play the opponent's reply, and so on. Play a different move for the same side to start a second line."}</div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.line ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>

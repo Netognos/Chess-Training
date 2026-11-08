@@ -70,8 +70,13 @@ export class Board {
     for (const a of this.arrows) {
       const [x1, y1] = this._xy(a.from), [x2, y2] = this._xy(a.to);
       const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      Object.entries({ x1, y1, x2, y2, stroke: a.color || "#15781B", "stroke-width": 0.16, "stroke-linecap": "round", opacity: 0.8, "marker-end": "url(#ah)" }).forEach(([k, v]) => l.setAttribute(k, v));
+      Object.entries({ x1, y1, x2, y2, stroke: a.color || "#15781B", "stroke-width": 0.16, "stroke-linecap": "round", opacity: a.opacity ?? 0.8, "marker-end": "url(#ah)" }).forEach(([k, v]) => l.setAttribute(k, v));
       this.svg.appendChild(l);
+      if (a.label) { // small move number at the arrow head
+        const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        Object.entries({ x: x2 + 0.18, y: y2 - 0.18, "font-size": 0.3, "font-weight": 700, fill: "#fff", stroke: a.color || "#15781B", "stroke-width": 0.06, "paint-order": "stroke", "text-anchor": "middle" }).forEach(([k, v]) => t.setAttribute(k, v));
+        t.textContent = a.label; this.svg.appendChild(t);
+      }
     }
   }
 
