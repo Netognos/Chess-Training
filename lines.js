@@ -77,8 +77,8 @@ export class LineBuilder {
   // what the text fields want: main line + side lines as SAN strings
   mainSan() { const l = this.lines[this.main]; return l ? l.moves.map((m) => m.san).join(" ") : ""; }
   mainMoves() { return this.lines[this.main]?.moves || []; }
-  sideLines() { const mm = this.mainMoves(); return this.lines.map((l, i) => ({ i, moves: l.moves, branch: branchAt(mm, l.moves) })).filter((x) => x.i !== this.main && x.moves.length); }
-  text() { return this.lines.map((l, i) => `${i === this.main ? "Main" : "Line " + (i + 1)}: ${fmt(this.root, l.moves)}`).join("\n"); }
+  sideLines() { const mm = this.mainMoves(); return this.lines.map((l, i) => ({ i, moves: l.moves, branch: branchAt(mm, l.moves), verdict: l.verdict || null })).filter((x) => x.i !== this.main && x.moves.length); }
+  text() { return this.lines.map((l, i) => `${i === this.main ? "Main" : "Line " + (i + 1)}${l.verdict === "bad" ? " (rejected)" : l.verdict === "good" ? " (works)" : ""}: ${fmt(this.root, l.moves)}`).join("\n"); }
   _boardView() {
     const l = this.line;
     if (this.follow && l) { const c = posAt(this.root, l.moves, this.cursor); const m = l.moves[this.cursor - 1]; this.board.setFen(c.fen(), { last: m ? [m.uci.slice(0, 2), m.uci.slice(2, 4)] : null }); }
@@ -98,10 +98,11 @@ export class LineBuilder {
     const rows = this.lines.map((l, i) => {
       const moves = fmtTokens(this.root, l.moves).map((t, j) => `${t.no ? `<span class="muted">${t.no}</span>` : ""}<a href="#" class="lbm${i === this.cur && j + 1 === this.cursor ? " on" : ""}" data-l="${i}" data-p="${j + 1}">${E(t.san)}</a>`).join(" ");
       return `<div class="lbrow${i === this.cur ? " cur" : ""}" data-l="${i}"><button class="lbstar${i === this.main ? " on" : ""}" data-main="${i}" title="Make this the main line">${i === this.main ? "★" : "☆"}</button>
-        <span class="lbno" data-sel="${i}">${i === this.main ? "Main" : "Line " + (i + 1)}</span><span class="lbmoves">${moves}</span><button class="lbdel" data-del="${i}" title="Delete line">✕</button></div>`;
+        <span class="lbno" data-sel="${i}">${i === this.main ? "Main" : "Line " + (i + 1)}</span><span class="lbmoves">${moves}</span>
+        ${i === this.main ? "" : `<span class="lbv"><button class="lbok${l.verdict === "good" ? " on" : ""}" data-v="${i}:good" title="I think this works">✓</button><button class="lbbad${l.verdict === "bad" ? " on" : ""}" data-v="${i}:bad" title="I looked at this, but it doesn't work">✗</button></span>`}<button class="lbdel" data-del="${i}" title="Delete line">🗑</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves: the pieces stay where they are on the board (calculate it in your head), but they count as moved. After 1.e4 you continue with the pawn from e4, even though the board still shows it on e2. Each move is written down here as a line. A move for the side that isn't to move starts a second line."}</div>
+      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. Mark extra lines with ✓ (works) or ✗ (looked at it, doesn't work): Stockfish checks whether you were right. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves: the pieces stay where they are on the board (calculate it in your head), but they count as moved. After 1.e4 you continue with the pawn from e4, even though the board still shows it on e2. Each move is written down here as a line. A move for the side that isn't to move starts a second line."}</div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.hist.length ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
@@ -109,6 +110,7 @@ export class LineBuilder {
     this.el.querySelectorAll(".lbm").forEach((a) => (a.onclick = (e) => { e.preventDefault(); this.cur = +a.dataset.l; this.cursor = +a.dataset.p; this.render(); }));
     this.el.querySelectorAll("[data-sel]").forEach((a) => (a.onclick = () => { this.cur = +a.dataset.sel; this.cursor = this.line.moves.length; this.render(); }));
     this.el.querySelectorAll("[data-main]").forEach((b) => (b.onclick = () => { this.main = +b.dataset.main; this.render(); this.onChange(); }));
+    this.el.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => { const [i, val] = b.dataset.v.split(":"); const l = this.lines[+i]; l.verdict = l.verdict === val ? null : val; this.render(); this.onChange(); }));
     this.el.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => this.del(+b.dataset.del)));
     const act = (k) => this.el.querySelector(`[data-act="${k}"]`);
     act("undo").onclick = () => this.undo();
@@ -167,17 +169,25 @@ const tok = (root, moves, k) => { const [, side, , , , n] = root.split(" "); con
 // Check all extra lines against the main line + which serious defences after your first move you didn't cover.
 export async function sideReport({ gradeMove, eng, root, main, sides, ms = 400 }) {
   const items = [];
+  let rootCp = null;
+  if (eng && sides.some((s) => s.verdict)) { const [b] = await eng.analyse(root, { movetime: 700 }); rootCp = lineToCp(b); }
   for (const s of sides.slice(0, 5)) {
     const from = Math.min(s.branch, s.moves.length - 1);
     const r = await checkLine(gradeMove, root, s.moves, { ms, maxPlies: 8, from, eng });
     const mv = s.moves[from], instead = main[from];
     const title = r.kind === "defence" ? `If ${tok(root, s.moves, from)}${instead ? ` instead of ${instead.san}` : ""}` : `Other idea: ${tok(root, s.moves, from)}${instead ? ` instead of ${instead.san}` : ""}`;
-    let verdict, cls;
-    if (r.stopped !== null) { verdict = "✗ your plan doesn't hold here"; cls = "no"; }
+    let verdict, cls, judged = null;
+    const works = r.stopped === null && r.holds && (r.endCp == null || rootCp == null || winPct(rootCp) - winPct(r.endCp) < 10);
+    if (s.verdict === "bad") {
+      judged = !works;
+      verdict = !works ? `✓ correctly rejected${r.endCp != null ? ` (this line ends at ${ev(r.endCp)} for you)` : ""}` : `✗ you rejected it, but it works (${ev(r.endCp)})`; cls = !works ? "ok" : "no";
+    } else if (s.verdict === "good" && !works) { judged = false; verdict = `✗ you thought this works, but it doesn't${r.endCp != null ? ` (${ev(r.endCp)})` : ""}`; cls = "no"; }
+    else if (r.stopped !== null) { verdict = "✗ your plan doesn't hold here"; cls = "no"; }
     else if (!r.holds) { verdict = "½ playable, but there is something better"; cls = "warn"; }
     else if (r.answer) { verdict = `? you didn't give your answer. Best is ${r.answer.san} (${ev(r.answer.cp)})`; cls = "info"; }
     else { verdict = `✓ holds${r.endCp != null ? ` (${ev(r.endCp)})` : ""}`; cls = "ok"; }
-    items.push({ line: s.i + 1, title, verdict, cls, notes: r.notes, kind: r.kind, holds: r.stopped === null && r.holds && !r.answer, san: mv.san, text: fmt(root, s.moves) });
+    if (s.verdict === "good" && works && judged === null) { judged = true; verdict = "✓ " + verdict.replace(/^✓ /, ""); }
+    items.push({ line: s.i + 1, title: (s.verdict === "bad" ? "Rejected: " : "") + title, verdict, cls, notes: r.notes, kind: r.kind, mark: s.verdict, judged, holds: r.stopped === null && r.holds && !r.answer, san: mv.san, text: fmt(root, s.moves) });
   }
   // serious defences after your first move: are they all in your lines?
   let coverage = null;

@@ -108,3 +108,7 @@ img.ghost { position: fixed; pointer-events: none; z-index: 100; }
 .lbstar,.lbdel{background:none;border:none;cursor:pointer;font-size:1em;padding:0 2px;color:inherit}
 .lbstar.on{color:#c90}
 .feedback.warn { background: #fdf3dc; color: #6b4a00; }
+.lbv{display:inline-flex;gap:2px}
+.lbok,.lbbad{border:1px solid var(--line,#ccc);background:none;border-radius:5px;cursor:pointer;font-size:.85em;padding:0 5px;color:inherit;opacity:.55}
+.lbok.on{background:#15781B;color:#fff;opacity:1;border-color:#15781B}
+.lbbad.on{background:#B33A3A;color:#fff;opacity:1;border-color:#B33A3A}
