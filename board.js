@@ -10,7 +10,7 @@ export class Board {
     this.el = el; this.orientation = orientation; this.interactive = interactive; this.onMove = onMove;
     this.chess = new Chess(); this.sel = null; this.last = null; this.arrows = []; this.locked = false;
     // intercept mode: moves are handed to intercept(from, to, promo) instead of being played; targetsFor(sq) gives the dots
-    this.intercept = null; this.targetsFor = null;
+    this.intercept = null; this.targetsFor = null; this.pieceAt = null; // pieceAt: the "invisible" pieces of a line
     el.classList.add("board");
     el.innerHTML = "";
     this.grid = document.createElement("div"); this.grid.className = "grid"; el.appendChild(this.grid);
@@ -86,7 +86,8 @@ export class Board {
     const sq = t.dataset.sq, p = this.chess.get(sq);
     if (this.intercept) {
       if (this.sel && this.sel !== sq && (!this.targetsFor || this.targetsFor(this.sel).includes(sq))) { this._attempt(this.sel, sq); return; }
-      if (p) { this.sel = sq; this.render(); this._startDrag(e, sq, t); } else { this.sel = null; this.render(); }
+      const vp = this.pieceAt ? this.pieceAt(sq) : p;
+      if (vp) { this.sel = sq; this.render(); this._startDrag(e, sq, this.grid.querySelector(`[data-sq="${sq}"]`)); } else { this.sel = null; this.render(); }
       return;
     }
     if (this.sel && this.sel !== sq) {
@@ -98,7 +99,11 @@ export class Board {
   }
 
   _startDrag(e, from, cell) {
-    const img = cell.querySelector("img"); if (!img) return;
+    const img = cell && cell.querySelector("img");
+    if (!img) { // a piece that is only "there" in the line: drag without a picture
+      const up0 = (ev) => { window.removeEventListener("pointerup", up0); const under = document.elementFromPoint(ev.clientX, ev.clientY); const t = under && under.closest(".sq"); if (t && t.dataset.sq !== from && this.el.contains(t)) this._attempt(from, t.dataset.sq); };
+      window.addEventListener("pointerup", up0); return;
+    }
     const ghost = img.cloneNode(); ghost.className = "ghost"; const size = cell.getBoundingClientRect().width;
     ghost.style.width = ghost.style.height = size + "px"; document.body.appendChild(ghost);
     let moved = false;
@@ -118,7 +123,7 @@ export class Board {
 
   async _attempt(from, to) {
     if (this.intercept) {
-      const p = this.chess.get(from); let promo;
+      const p = this.pieceAt ? this.pieceAt(from) : this.chess.get(from); let promo;
       if (p && p.type === "p" && (to[1] === "8" || to[1] === "1")) promo = await this._askPromo(p.color);
       this.sel = null; this.render();
       this.intercept(from, to, promo); return;

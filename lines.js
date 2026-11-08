@@ -8,12 +8,20 @@ const posAt = (root, moves, n) => { const c = new Chess(root); for (const m of m
 export class LineBuilder {
   constructor({ board, rootFen, el, esc, onChange = () => {}, maxLines = 6 }) {
     this.board = board; this.root = rootFen; this.el = el; this.esc = esc; this.onChange = onChange; this.maxLines = maxLines;
-    this.lines = []; this.hist = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
+    this.lines = []; this.hist = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow2") === "1"; } catch { return false; } })();
+    this.arrows = (() => { try { return localStorage.getItem("chesscoach.arrows") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
     board.intercept = (f, t, p) => this.move(f, t, p);
     board.targetsFor = (sq) => this.targets(sq);
+    board.pieceAt = (sq) => this.pieceAt(sq);
     this.render();
   }
-  destroy() { this.board.intercept = null; this.board.targetsFor = null; }
+  destroy() { this.board.intercept = null; this.board.targetsFor = null; this.board.pieceAt = null; }
+  // the piece that is "really" on a square in the line (even if the board still shows the starting position)
+  pieceAt(sq) {
+    const moves = this.line ? this.line.moves : []; const start = this.line ? this.cursor : 0;
+    for (let k = start; k >= 0; k--) { const c = posAt(this.root, moves, k); const p = c.get(sq); if (p && p.color === c.turn()) return p; }
+    return null;
+  }
   get line() { return this.lines[this.cur] || null; }
   // where would a move from `from` go? the latest point (from the cursor back) where that piece's side is to move
   _resolve(from, to, promo) {
@@ -34,7 +42,7 @@ export class LineBuilder {
   }
   move(from, to, promo) {
     const r = this._resolve(from, to, promo);
-    if (!r) { this.msg = this.follow ? "That move isn't possible here." : "That move doesn't fit in this line. Tip: turn on “Show line on board” to move pieces that already moved."; this.render(); return; }
+    if (!r) { this.msg = "That move isn't possible in this line. Remember: pieces that moved in your line are on their new square (follow the arrows)."; this.render(); return; }
     const m = r.c.move({ from, to, promotion: promo || (r.legal[0].promotion ? "q" : undefined) });
     const mv = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     const prefix = this.line ? this.line.moves.slice(0, r.k) : [];
@@ -80,7 +88,7 @@ export class LineBuilder {
       const arr = seg.map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (base + j) % 2 === 0 ? "#15781B" : "#B33A3A",
         opacity: j === seg.length - 1 ? 0.9 : (this.follow ? 0.15 : 0.35) + 0.35 * (j + 1) / seg.length, label: base + j + 1 }));
       if (this.follow) arr.push(...l.moves.slice(to, to + 3).map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (to + j) % 2 === 0 ? "#15781B" : "#B33A3A", opacity: 0.3, label: to + j + 1 })));
-      this.board.setArrows(arr);
+      this.board.setArrows(this.arrows ? arr : []);
       if (!this.follow && this.cursor) { const m = l.moves[this.cursor - 1]; this.board.last = [m.uci.slice(0, 2), m.uci.slice(2, 4)]; this.board.render(); }
     }
   }
@@ -93,11 +101,11 @@ export class LineBuilder {
         <span class="lbno" data-sel="${i}">${i === this.main ? "Main" : "Line " + (i + 1)}</span><span class="lbmoves">${moves}</span><button class="lbdel" data-del="${i}" title="Delete line">✕</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: each move is written down here as a line, and nothing is played against you. Then play the opponent's reply, and so on. A move for the side that isn't to move starts a second line. Untick “Show line on board” to keep the starting position on the board, with arrows."}</div>
+      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves: the pieces stay where they are on the board (calculate it in your head), but they count as moved. After 1.e4 you continue with the pawn from e4, even though the board still shows it on e2. Each move is written down here as a line. A move for the side that isn't to move starts a second line."}</div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.hist.length ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
-        <button class="btn secondary small" data-act="start" ${this.line && this.cursor ? "" : "disabled"}>⏮ Start</button><label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Show line on board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
+        <button class="btn secondary small" data-act="start" ${this.line && this.cursor ? "" : "disabled"}>⏮ Start</button><label class="row small"><input type="checkbox" data-act="arrows" ${this.arrows ? "checked" : ""}> Arrows</label><label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Move the pieces on the board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
     this.el.querySelectorAll(".lbm").forEach((a) => (a.onclick = (e) => { e.preventDefault(); this.cur = +a.dataset.l; this.cursor = +a.dataset.p; this.render(); }));
     this.el.querySelectorAll("[data-sel]").forEach((a) => (a.onclick = () => { this.cur = +a.dataset.sel; this.cursor = this.line.moves.length; this.render(); }));
     this.el.querySelectorAll("[data-main]").forEach((b) => (b.onclick = () => { this.main = +b.dataset.main; this.render(); this.onChange(); }));
@@ -106,7 +114,8 @@ export class LineBuilder {
     act("undo").onclick = () => this.undo();
     act("new").onclick = () => { this.cur = -1; this.cursor = 0; this.msg = "Your next move starts a new line from the starting position."; this.render(); };
     act("start").onclick = () => { this.cursor = 0; this.render(); };
-    act("follow").onchange = (e) => { this.follow = e.target.checked; try { localStorage.setItem("chesscoach.follow", this.follow ? "1" : "0"); } catch {} this.render(); };
+    act("arrows").onchange = (e) => { this.arrows = e.target.checked; try { localStorage.setItem("chesscoach.arrows", this.arrows ? "1" : "0"); } catch {} this.render(); };
+    act("follow").onchange = (e) => { this.follow = e.target.checked; try { localStorage.setItem("chesscoach.follow2", this.follow ? "1" : "0"); } catch {} this.render(); };
     if (act("clear")) act("clear").onclick = () => this.clear();
   }
 }
