@@ -601,3 +601,15 @@ function repertoireFromGames(A) {
   const bd4 = pick("b", /Queen'?s|Indian|Slav|Gr[uü]nfeld|Dutch|Benoni|Budapest|Catalan|London|Nimzo|Bogo|Trompowsky|Colle|English|Reti|R[ée]ti|^d4|^c4|^Nf3/i); if (bd4) out.push({ label: "As Black vs 1.d4", name: bd4.name, games: bd4.games, scorePct: bd4.scorePct });
   return out.length ? out : null;
 }
+
+// Player type + aggression for the rest of the app (home, openings): from the latest test, otherwise from the games.
+export function currentStyle(p, C) {
+  if (!p) return null;
+  const t = (p.tests || []).filter((x) => x.done).slice(-1)[0];
+  const gs = Object.values(p.games || {});
+  const A = gs.length ? C.aggregate(gs) : null;
+  if (!t && !A) return null;
+  const R = t ? computeResult(p, t, A) : null;
+  const type = R ? R.type : guessTypeFromGames(A);
+  return { type, typeName: PLAYER_TYPES[type].name, aggression: R ? R.aggression : A?.style?.aggression ?? null, fromTest: !!R, A };
+}

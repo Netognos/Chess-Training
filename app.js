@@ -7,7 +7,8 @@ import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
-import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo } from "./test.js";
+import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle } from "./test.js";
+import { openingsView, repertoireView } from "./openingsview.js";
 
 // ------------------------------------------------------------------ state
 const KEY = "chesscoach.v1";
@@ -40,25 +41,47 @@ function newPlayer(d) {
 function srs(item, ok) { item.attempts = (item.attempts || 0) + 1; if (ok) { item.successes = (item.successes || 0) + 1; item.box = Math.min((item.box || 0) + 1, 5); } else item.box = 1; item.due = addDays(INTERVALS[item.box]); item.last = today(); item.lastOk = ok; }
 
 // ------------------------------------------------------------------ routing
-const SECTIONS = {
-  analyse: [["home", "Start"], ["games", "Games"], ["report", "Report"], ["training", "Training"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"], ["log", "Log"]],
-  test: [["test", "Test"], ["results", "Results"], ["profile", "Profile"], ["practice", "Modules"]],
+const ICONS = {
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v12h14V9"/><path d="M10 21v-6h4v6"/>',
+  analyse: '<path d="M3 21h18"/><path d="M6 17V11"/><path d="M11 17V5"/><path d="M16 17v-8"/><path d="M21 17v-3"/>',
+  train: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>',
+  test: '<circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.6 1.6"/><path d="M9.5 2.5h5"/><path d="M12 2.5V6"/>',
+  openings: '<path d="M2.5 5.5C5.5 4 9 4 12 5.8c3-1.8 6.5-1.8 9.5-.3v13.7c-3-1.5-6.5-1.5-9.5.3-3-1.8-6.5-1.8-9.5-.3z"/><path d="M12 5.8v13.7"/>',
+  puzzle: '<path d="M8 3h4a2 2 0 1 1 4 0h3v5a2 2 0 1 0 0 4v5h-5a2 2 0 1 0-4 0H5v-5a2 2 0 1 0 0-4V3z"/>',
+  king: '<path d="M12 2v5M9.5 4.5h5"/><path d="M7 21h10"/><path d="M8 18h8l1-7c-2-2-8-2-10 0z"/>',
 };
+const icon = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
+const SECTIONS = {
+  home: { label: "Home", tabs: [["home", "Overview"], ["account", "Profile"], ["log", "Log & backup"]] },
+  analyse: { label: "Analyse", tabs: [["games", "Games"], ["report", "Report"]] },
+  train: { label: "Train", tabs: [["training", "Plan"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
+  test: { label: "Test", tabs: [["test", "Test"], ["results", "Results"], ["profile", "Player profile"], ["practice", "Modules"]] },
+  openings: { label: "Openings", tabs: [["openings", "Library"], ["repertoire", "My repertoire"]] },
+};
+const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
+  board: "Analysis board", notebook: "Notebook", test: "Thinking test", results: "Test results", profile: "Player profile", practice: "Training modules", openings: "Opening library", repertoire: "My repertoire" };
+const OC = () => ({ ...C, style: () => currentStyle(P(), C), Board, icon });
 const C = { P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
-const views = { home, games, report, training, puzzles, endgames, board, notebook, log,
+const views = { home, account, games, report, training, puzzles, endgames, board, notebook, log,
+  openings: (v, arg) => openingsView(v, arg, OC()), repertoire: (v) => repertoireView(v, OC()),
   test: (v) => testView(v, C), results: (v) => resultsView(v, C), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
-const sectionOf = (t) => (SECTIONS.test.some(([k]) => k === t) ? "test" : "analyse");
+const sectionOf = (t) => Object.keys(SECTIONS).find((k) => SECTIONS[k].tabs.some(([x]) => x === t)) || "home";
+const lastTab = {};
 function renderNav() {
-  const sec = sectionOf(tab);
-  document.querySelectorAll("#sections button").forEach((b) => { b.classList.toggle("active", b.dataset.sec === sec); b.onclick = () => go(b.dataset.sec === "test" ? "test" : "home"); });
-  $("#tabs").innerHTML = SECTIONS[sec].map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? "active" : ""}">${l}</button>`).join("");
+  const sec = sectionOf(tab); lastTab[sec] = tab;
+  $("#sections").innerHTML = Object.entries(SECTIONS).map(([k, s]) => `<button data-sec="${k}" class="${k === sec ? "active" : ""}" ${k === sec ? 'aria-current="page"' : ""}>${icon(k)}<span>${s.label}</span></button>`).join("");
+  document.querySelectorAll("#sections button").forEach((b) => (b.onclick = () => go(lastTab[b.dataset.sec] || SECTIONS[b.dataset.sec].tabs[0][0])));
+  const tabs = SECTIONS[sec].tabs;
+  $("#tabs").innerHTML = tabs.length > 1 ? tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? "active" : ""}">${l}</button>`).join("") : "";
   document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => go(b.dataset.tab)));
+  $("#pageTitle").textContent = TITLES[tab] ?? "";
 }
+window.__ccGo = (t, a) => go(t, a);
 function go(t, arg) {
   tab = t;
   const v = $("#view"); v.innerHTML = "";
-  if (!P() && t !== "home") { tab = "home"; renderNav(); home(v); return renderPicker(); }
+  if (!P() && t !== "home" && t !== "openings") { tab = "home"; renderNav(); home(v); return renderPicker(); }
   renderNav();
   Promise.resolve(views[t](v, arg)).catch((e) => { console.error(e); v.innerHTML = `<div class="card"><p style="color:var(--bad)">Something went wrong: ${esc(e.message || e)}</p></div>`; });
   renderPicker(); window.scrollTo(0, 0);
@@ -93,25 +116,34 @@ function home(v) {
   const dueEg = allEndgames(p).filter((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }).length;
   const last = p.reports[0];
   const nG = Object.keys(p.games).length;
-  const stepsDef = [["1", "Profile", !!p.name, "home"], ["2", "Accounts", !!(p.lichess || p.chesscom), "home"], ["3", "Load games", nG > 0, "games"], ["4", "Statistics", nG > 0, "report"], ["5", "Strengths & weak points", nG > 0, "report"], ["6", "Training", Object.keys(p.practice || {}).length > 0, "training"]];
-  v.innerHTML = `<div class="card"><h2>Step by step</h2><div class="steps">${stepsDef.map(([n, l, d, t]) => `<div class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${n}</div>${l}</div>`).join("")}
-    <div class="step" data-go="test"><div class="n">→</div>Test & player profile</div></div>
-    ${!(p.lichess || p.chesscom) ? `<p class="small" style="margin-top:8px">Fill in your Lichess and/or Chess.com username under <b>Profile</b> below.</p>` : ""}</div>
-  <div class="card"><h2>${esc(p.name)}</h2>
-    <div class="stats">
-      <div class="stat"><div class="v">${Object.keys(p.games).length}</div><div class="l">games analysed</div></div>
-      <div class="stat"><div class="v">${last ? last.summary.scorePct + "%" : "–"}</div><div class="l">score in analysed games</div></div>
-      <div class="stat"><div class="v">${duePz}</div><div class="l">puzzles due</div></div>
-      <div class="stat"><div class="v">${dueEg}</div><div class="l">endgames to review</div></div>
-    </div>
-    <p class="muted small">${last ? `Last analysis: ${last.date} (${last.summary.games} games)` : "No analysis yet. Start in <b>Games</b>."}</p>
-    <div class="row"><button class="btn" data-go="${Object.keys(p.games).length ? "puzzles" : "games"}">${Object.keys(p.games).length ? "Start training" : "Import games"}</button>
-    <button class="btn secondary" data-go="report">Report & plan</button></div></div>
+  const tests = (p.tests || []).filter((t) => t.done);
+  const st = currentStyle(p, C);
+  const stepsDef = [["Profile", !!p.name, "account"], ["Accounts", !!(p.lichess || p.chesscom), "account"], ["Load games", nG > 0, "games"], ["Report", (p.reports || []).length > 0, "report"], ["Training", Object.keys(p.practice || {}).length > 0 || Object.values(p.puzzles).some((x) => x.attempts), "training"], ["Test", tests.length > 0, "test"]];
+  const nDone = stepsDef.filter((x) => x[1]).length;
+  const todo = (ic, title, sub, count, go_, label) => `<div class="todo"><div class="ic">${icon(ic)}</div><div><b>${title}</b><span class="small">${sub}</span></div><div class="row" style="gap:12px">${count ? `<span class="count">${count}</span>` : ""}<button class="btn ${count ? "" : "secondary"} small" data-go="${go_}">${label}</button></div></div>`;
+  v.innerHTML = `<div class="hello"><div><div class="who">${new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"},</div><h1 style="margin:0;font-size:34px;font-weight:780">${esc(p.name)}</h1></div>
+      <div class="rating"><b>${playerElo(p)}</b>rating${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
+    <div class="card"><h2>Today</h2><div class="today">
+      ${todo("puzzle", "Puzzles from your games", duePz ? "Your own mistakes, repeated at spaced intervals" : nG ? "Nothing due. Come back tomorrow" : "Import games first: your mistakes become puzzles", duePz, nG ? "puzzles" : "games", duePz ? "Solve" : nG ? "Open" : "Import")}
+      ${todo("king", "Endgames to review", "Theory positions you play out against the engine", dueEg, "endgames", "Train")}
+      ${todo("test", tests.length ? "Thinking test" : "Take the thinking test", tests.length ? `Last test ${esc(tests[tests.length - 1].date)}: test rating ${tests[tests.length - 1].result?.overall ?? "–"}` : "Measures calculation depth, style and player type", null, tests.length ? "results" : "test", tests.length ? "Results" : "Start")}
+      ${todo("analyse", "Your games", nG ? `${nG} games analysed${last ? `, last report ${esc(last.date)}` : ""}` : "Load the last months from Lichess or Chess.com", null, "games", nG ? "Import new" : "Import")}
+      ${todo("openings", "Openings", st ? `Ideas, strengths and weak sides, with what fits a ${esc(st.typeName.toLowerCase())}` : "Ideas, strengths and weak sides of 36 openings", null, "openings", "Browse")}
+    </div></div>
     <div class="card"><h2>Next steps</h2>${nextStepsHtml(p)}</div>
-    <div class="card"><h2>Profile</h2>${profileForm(p)}<div class="row" style="margin-top:12px"><button class="btn secondary" id="saveP">Save profile</button><button class="btn secondary danger" id="delP" style="color:#fff">Delete player</button></div></div>`;
+    ${nDone < stepsDef.length ? `<div class="card"><h2>Getting started</h2><p class="small muted">${nDone} of ${stepsDef.length} done</p><div class="progress">${stepsDef.map(([, d]) => `<span class="${d ? "done" : ""}"></span>`).join("")}</div>
+      <div class="steps" style="margin-top:12px">${stepsDef.map(([l, d, t], i) => `<div class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${i + 1}</div>${l}</div>`).join("")}</div></div>` : ""}`;
   v.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
   bindNextSteps(v, p);
-  $("#saveP").onclick = () => { Object.assign(p, readProfile(v)); save(); renderPicker(); toast("Saved"); };
+}
+function account(v) {
+  const p = P();
+  v.innerHTML = `<div class="card"><h2>${esc(p.name)}</h2><p class="small muted">The usernames let the app download your games. Rating is used when there are no games yet.</p>${profileForm(p)}
+      <div class="row" style="margin-top:14px"><button class="btn" id="saveP">Save profile</button></div></div>
+    <div class="card" id="aiCardA"></div>
+    <div class="card"><h2>Delete player</h2><p class="small muted">Removes ${esc(p.name)} and all games, puzzles, tests and notes from this browser. Make a backup first (Home → Log &amp; backup).</p><button class="btn danger" id="delP">Delete ${esc(p.name)}</button></div>`;
+  aiSettings(v.querySelector("#aiCardA"));
+  $("#saveP").onclick = () => { Object.assign(p, readProfile(v)); save(); renderPicker(); toast("Profile saved"); };
   $("#delP").onclick = () => { if (confirm(`Delete ${p.name} and all their data?`)) { delete S.players[p.id]; S.current = Object.keys(S.players)[0] || null; save(); go("home"); } };
 }
 function profileForm(p) {

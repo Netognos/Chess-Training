@@ -1,9 +1,9 @@
 // Service worker: makes Chess Coach installable and usable offline.
 // Bump VERSION on every release so installed apps pick up the new files.
-const VERSION = "cc-v18";
+const VERSION = "cc-v19";
 const CORE = [
   "./", "index.html", "style.css", "manifest.webmanifest",
-  "app.js", "analysis.js", "board.js", "coach.js", "data.js", "engine.js", "pieces.js", "reader.js", "explain.js", "ai.js", "lines.js", "style.js", "testextra.js", "extrabank.js", "test.js", "testbank.js",
+  "app.js", "analysis.js", "board.js", "coach.js", "data.js", "engine.js", "pieces.js", "reader.js", "explain.js", "ai.js", "lines.js", "openings.js", "openingsview.js", "fonts/archivo.woff2", "style.js", "testextra.js", "extrabank.js", "test.js", "testbank.js",
   "vendor/chess.js", "vendor/stockfish/stockfish-19-lite-single.js", "vendor/stockfish/stockfish-19-lite-single.wasm",
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-192.png", "icons/maskable-512.png", "icons/apple-touch-icon.png",
 ];
