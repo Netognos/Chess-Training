@@ -7,7 +7,7 @@ const posAt = (root, moves, n) => { const c = new Chess(root); for (const m of m
 export class LineBuilder {
   constructor({ board, rootFen, el, esc, onChange = () => {}, maxLines = 6 }) {
     this.board = board; this.root = rootFen; this.el = el; this.esc = esc; this.onChange = onChange; this.maxLines = maxLines;
-    this.lines = []; this.cur = -1; this.cursor = 0; this.follow = false; this.main = 0; this.msg = "";
+    this.lines = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
     board.intercept = (f, t, p) => this.move(f, t, p);
     board.targetsFor = (sq) => this.targets(sq);
     this.render();
@@ -33,7 +33,7 @@ export class LineBuilder {
   }
   move(from, to, promo) {
     const r = this._resolve(from, to, promo);
-    if (!r) { this.msg = "That move doesn't fit in this line. Tip: turn on “Show line on board” to move pieces that already moved."; this.render(); return; }
+    if (!r) { this.msg = this.follow ? "That move isn't possible here." : "That move doesn't fit in this line. Tip: turn on “Show line on board” to move pieces that already moved."; this.render(); return; }
     const m = r.c.move({ from, to, promotion: promo || (r.legal[0].promotion ? "q" : undefined) });
     const mv = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     const prefix = this.line ? this.line.moves.slice(0, r.k) : [];
@@ -64,10 +64,11 @@ export class LineBuilder {
     if (this.follow && l) { const c = posAt(this.root, l.moves, this.cursor); const m = l.moves[this.cursor - 1]; this.board.setFen(c.fen(), { last: m ? [m.uci.slice(0, 2), m.uci.slice(2, 4)] : null }); }
     else { this.board.setFen(this.root); }
     if (l) { // arrows for the selected line: yours green, the opponent's red; the most recent move strongest
-      const from = this.follow ? this.cursor : 0, to = this.follow ? Math.min(l.moves.length, this.cursor + 4) : this.cursor;
-      const seg = l.moves.slice(Math.max(from, to - 10), to); const base = Math.max(from, to - 10);
-      this.board.setArrows(seg.map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (base + j) % 2 === 0 ? "#15781B" : "#B33A3A",
-        opacity: this.follow ? 0.8 : j === seg.length - 1 ? 0.95 : 0.35 + 0.4 * (j + 1) / seg.length, label: base + j + 1 })));
+      const to = this.cursor, seg = l.moves.slice(Math.max(0, to - 10), to), base = Math.max(0, to - 10);
+      const arr = seg.map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (base + j) % 2 === 0 ? "#15781B" : "#B33A3A",
+        opacity: j === seg.length - 1 ? 0.9 : (this.follow ? 0.15 : 0.35) + 0.35 * (j + 1) / seg.length, label: base + j + 1 }));
+      if (this.follow) arr.push(...l.moves.slice(to, to + 3).map((m, j) => ({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), color: (to + j) % 2 === 0 ? "#15781B" : "#B33A3A", opacity: 0.3, label: to + j + 1 })));
+      this.board.setArrows(arr);
       if (!this.follow && this.cursor) { const m = l.moves[this.cursor - 1]; this.board.last = [m.uci.slice(0, 2), m.uci.slice(2, 4)]; this.board.render(); }
     }
   }
@@ -80,11 +81,11 @@ export class LineBuilder {
         <span class="lbno" data-sel="${i}">${i === this.main ? "Main" : "Line " + (i + 1)}</span><span class="lbmoves">${moves}</span><button class="lbdel" data-del="${i}" title="Delete line">✕</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: the pieces stay where they are and the move is written down here. Then play the opponent's reply, and so on. Play a different move for the same side to start a second line."}</div>
+      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves on the board: each move is written down here as a line, and nothing is played against you. Then play the opponent's reply, and so on. A move for the side that isn't to move starts a second line. Untick “Show line on board” to keep the starting position on the board, with arrows."}</div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.line ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
-        <label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Show line on board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
+        <button class="btn secondary small" data-act="start" ${this.line && this.cursor ? "" : "disabled"}>⏮ Start</button><label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Show line on board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
     this.el.querySelectorAll(".lbm").forEach((a) => (a.onclick = (e) => { e.preventDefault(); this.cur = +a.dataset.l; this.cursor = +a.dataset.p; this.render(); }));
     this.el.querySelectorAll("[data-sel]").forEach((a) => (a.onclick = () => { this.cur = +a.dataset.sel; this.cursor = this.line.moves.length; this.render(); }));
     this.el.querySelectorAll("[data-main]").forEach((b) => (b.onclick = () => { this.main = +b.dataset.main; this.render(); this.onChange(); }));
@@ -92,7 +93,8 @@ export class LineBuilder {
     const act = (k) => this.el.querySelector(`[data-act="${k}"]`);
     act("undo").onclick = () => this.undo();
     act("new").onclick = () => { this.cur = -1; this.cursor = 0; this.msg = "Your next move starts a new line from the starting position."; this.render(); };
-    act("follow").onchange = (e) => { this.follow = e.target.checked; this.render(); };
+    act("start").onclick = () => { this.cursor = 0; this.render(); };
+    act("follow").onchange = (e) => { this.follow = e.target.checked; try { localStorage.setItem("chesscoach.follow", this.follow ? "1" : "0"); } catch {} this.render(); };
     if (act("clear")) act("clear").onclick = () => this.clear();
   }
 }
