@@ -27,7 +27,20 @@ export function endgameType(fen) {
 }
 export function classify(drop) { return drop >= 15 ? "blunder" : drop >= 10 ? "mistake" : drop >= 5 ? "inaccuracy" : null; }
 function parseTc(tc) { const m = /^(\d+)(?:\+(\d+))?/.exec(tc || ""); return m ? [+m[1], +(m[2] || 0)] : [null, null]; }
-export function tcCategory(tc) {
+export function isCorrespondence(tc, site) {
+  return /gameknot|correspondence|iccf|schemingmind|lechenicher/i.test(site || "") || tc === "-" || /^\d+\/\d+$/.test(tc || "") || /^1\/\d+/.test(tc || "");
+}
+// Stable id per game: the URL when the PGN has one, otherwise players + date + a hash of the moves
+export function gameKey(pgn) {
+  const h = (k) => (new RegExp(`\\[${k} "([^"]*)"`).exec(pgn) || [])[1] || "";
+  const link = h("Link"); if (link.startsWith("http")) return link;
+  const site = h("Site"); if (site.startsWith("http")) return site;
+  const moves = pgn.replace(/\[[^\]]*\]/g, "").replace(/\{[^}]*\}/g, "").replace(/\s+/g, " ").trim();
+  let x = 5381; for (let i = 0; i < moves.length; i++) x = ((x * 33) ^ moves.charCodeAt(i)) >>> 0;
+  return `${h("White")}-${h("Black")}-${h("UTCDate") || h("Date")}-${x.toString(36)}`;
+}
+export function tcCategory(tc, site) {
+  if (isCorrespondence(tc, site)) return "correspondence";
   const [b, i] = parseTc(tc); if (b === null) return "unknown";
   const e = b + 40 * i; return e < 180 ? "bullet" : e < 480 ? "blitz" : e < 1500 ? "rapid" : "classical";
 }
@@ -195,10 +208,10 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   const all = Object.values(phaseAcc).flat();
   const avg = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : null);
   return {
-    id: H.Site && H.Site !== "?" ? H.Site : `${H.White}-${H.Black}-${H.Date || H.UTCDate}-${g.moves.length}`,
+    id: gameKey(pgn),
     site: H.Site || "", date: H.UTCDate || H.Date || "", white: H.White, black: H.Black, color, result: res, score,
     playerElo: color === "w" ? H.WhiteElo : H.BlackElo, opponentElo: color === "w" ? H.BlackElo : H.WhiteElo,
-    timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl), termination: H.Termination || "", opening, eco: H.ECO || "",
+    timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
     plies: g.moves.length, accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),

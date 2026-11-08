@@ -2,7 +2,7 @@
 
 A personal chess trainer that runs entirely in your browser: on your laptop or your phone, with no server and no account. Stockfish 19 runs locally (WebAssembly).
 
-- **Games**: import your games from Lichess or Chess.com (by username) or from a PGN file, and analyse them with Stockfish.
+- **Games**: import your games from Lichess or Chess.com (by username), GameKnot correspondence games (download the PGN on GameKnot, then upload or paste it) or any PGN file, and analyse them with Stockfish. Correspondence games (GameKnot, Lichess correspondence, Chess.com daily) are marked separately.
 - **Report**: accuracy per phase (opening, middlegame, endgame); mistakes per 100 moves; the type of each error (missed tactic, hung piece, time trouble, endgame technique, positional); openings with your score and win chance after move 10; endgames reached; converting winning positions and saving lost ones. From that, it lists your **strengths and weak points** and builds a **weekly training plan**, based on GM Kuljasevic's study split and shifted toward your weak areas.
 - **Puzzles**: your own biggest mistakes come back as puzzles, with spaced repetition (1, 3, 7, 21 and 60 days).
 - **Endgames**: the theory positions you need to know (basic mates, square rule, opposition, Lucena, Philidor, K+B+N), played out against the engine. You can add your own positions.
@@ -56,7 +56,7 @@ python -m http.server 8000
 - **Analysis speed**: about 7–12 s per game on a laptop, slower on a phone. Lichess games that already have a server analysis are processed much faster, because their evaluations are reused.
 - **Engine limits**: this Stockfish build has no endgame tablebases. For K+B+N vs K it shows only about +1.5, even though the position is a forced win, so that drill only checks whether you mate within 50 moves.
 - **Error tags** are rules of thumb, e.g. "the best move was a capture or check" counts as a missed tactic. They are good for spotting patterns across many games; for any single position, look at it yourself.
-- **Downloading games**: the Lichess and Chess.com APIs allow requests from browsers. If it ever fails, export a PGN on the website and paste it in.
+- **Downloading games**: the Lichess and Chess.com APIs allow requests from browsers. If it ever fails, export a PGN on the website and paste it in. GameKnot has no public API and blocks requests from other sites, so its games go in via a PGN file.
 
 ## Project structure
 
