@@ -30,7 +30,7 @@ async function generate(prompt, schema, retried = false) {
   if (!r.ok) { const t = await r.text(); throw new Error(`Gemini ${r.status}: ${t.slice(0, 160)}`); }
   const j = await r.json();
   const txt = j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-  return JSON.parse(txt);
+  try { return JSON.parse(txt); } catch { throw new Error("The AI coach sent an answer that couldn't be read. Try again."); }
 }
 
 export async function testKey() {

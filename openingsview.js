@@ -9,7 +9,16 @@ const THEORY = ["", "Little theory", "Some theory", "A lot of theory"];
 const filt = { side: "all", fit: false, q: "" };
 
 const sanList = (moves) => moves.split(/\s+/).filter(Boolean).map((t) => t.replace(/^\d+\./, ""));
-function positions(o) { const c = new Chess(); const out = [{ fen: c.fen(), last: null }]; for (const s of sanList(o.moves)) { const m = c.move(s); out.push({ fen: c.fen(), last: [m.from, m.to], san: m.san }); } return out; }
+const POS = new Map(); // positions per opening, computed once
+const positions = (o) => { if (!POS.has(o.id)) POS.set(o.id, positionsOf(o)); return POS.get(o.id); };
+const MINI = new Map();
+// "B12" also finds "B10–B19"
+function ecoHit(q, eco) {
+  const m = /^([A-E])(\d{2})$/i.exec(q.trim()); if (!m) return false;
+  const code = m[1].toUpperCase() + m[2];
+  return eco.split(/,\s*/).some((part) => { const [a, b = a] = part.split(/[–-]/).map((s) => s.trim()); return a[0] === code[0] && code >= a && code <= (b.length === 3 ? b : a[0] + b); });
+}
+function positionsOf(o) { const c = new Chess(); const out = [{ fen: c.fen(), last: null }]; for (const s of sanList(o.moves)) { const m = c.move(s); out.push({ fen: c.fen(), last: [m.from, m.to], san: m.san }); } return out; }
 function miniBoard(fen, flip) {
   const rows = fen.split(" ")[0].split("/"); const cells = [];
   for (let r = 0; r < 8; r++) { let f = 0; for (const ch of rows[r]) { if (/\d/.test(ch)) { for (let k = 0; k < +ch; k++) cells.push({ r, f: f++, p: null }); } else cells.push({ r, f: f++, p: ch }); } }
@@ -37,16 +46,18 @@ const meter = (sharp) => `<div class="meter"><span style="text-align:right">Calm
 export function openingsView(v, arg, C) {
   if (arg?.id) { const o = OPENINGS.find((x) => x.id === arg.id); if (o) return detail(v, o, C); }
   const st = C.P() ? C.style() : null;
-  const list = () => OPENINGS.filter((o) => (filt.side === "all" || o.side === filt.side) && (!filt.fit || fitInfo(o, st)?.good) && (!filt.q || (o.name + " " + o.eco + " " + o.moves).toLowerCase().includes(filt.q.toLowerCase())))
+  if (!st) filt.fit = false; // "Fits my style" only exists when the style is known
+  const list = () => OPENINGS.filter((o) => (filt.side === "all" || o.side === filt.side) && (!filt.fit || fitInfo(o, st)?.good) && (!filt.q || (o.name + " " + o.eco + " " + o.moves).toLowerCase().includes(filt.q.toLowerCase()) || ecoHit(filt.q, o.eco)))
     .map((o) => ({ o, fit: fitInfo(o, st), g: yourGames(o, st) }))
     .sort((a, b) => (filt.fit ? (b.fit?.score ?? 0) - (a.fit?.score ?? 0) : 0));
   const draw = () => {
     const items = list();
-    v.querySelector("#oplist").innerHTML = items.length ? items.map(({ o, fit, g }) => `<button class="op" data-id="${o.id}">${miniBoard(positions(o).slice(-1)[0].fen, o.side !== "w")}
+    v.querySelector("#oplist").innerHTML = items.length ? items.map(({ o, fit, g }) => `<button class="op" data-id="${o.id}">${MINI.get(o.id) || (MINI.set(o.id, miniBoard(positions(o).slice(-1)[0].fen, o.side !== "w")), MINI.get(o.id))}
         <div><h3>${C.esc(o.name)}</h3><div class="eco">${SIDE_LABEL[o.side]} · ${C.esc(o.eco)}</div><p>${C.esc(o.idea)}</p>
         <div class="tagline">${meter(o.sharp)}</div>
         <div class="tagline"><span class="pill">${THEORY[o.theory]}</span>${fit?.good ? `<span class="pill fit">Fits your style</span>` : ""}${g ? `<span class="pill">You: ${g.n} games, ${g.score}%</span>` : ""}</div></div></button>`).join("")
-      : `<p class="muted">No openings match. Clear the search or the filters.</p>`;
+      : `<p class="muted">No openings match. <a href="#" id="clrF">Clear the search and filters</a></p>`;
+    const cl = v.querySelector("#clrF"); if (cl) cl.onclick = (e) => { e.preventDefault(); filt.side = "all"; filt.fit = false; filt.q = ""; v.querySelector("#opq").value = ""; draw(); };
     v.querySelectorAll(".op").forEach((b) => (b.onclick = () => C.go("openings", { id: b.dataset.id })));
     v.querySelectorAll(".chip[data-side]").forEach((c) => c.classList.toggle("on", c.dataset.side === filt.side));
     const fc = v.querySelector("#fitChip"); if (fc) fc.classList.toggle("on", filt.fit);

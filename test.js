@@ -8,7 +8,7 @@ import { explainMove, explainHtml } from "./explain.js";
 import { aiKey, setAiKey, testKey, rubricFrom, judgeReasoning } from "./ai.js";
 import { lineToCp, winPct } from "./engine.js";
 import { pvToSan } from "./analysis.js";
-import { runStyle, runDeep, pickExtra } from "./testextra.js";
+import { runStyle, runDeep, pickExtra, extraBank } from "./testextra.js";
 import { STYLES } from "./style.js";
 
 // Engine wrapper that remembers every analysis, so work done in the background while you think is reused when you submit.
@@ -97,19 +97,31 @@ export async function testView(v, C) {
       <p class="small muted">Tip: play it like a game. Think, write down your reasoning and the line you calculated, then move. The category stays hidden until you've answered.</p>
       <div class="row"><button class="btn" data-mode="quick">Quick test (15 positions, ~25 min)</button><button class="btn secondary" data-mode="full">Full test (39 positions, ~65 min)</button></div>
       <div class="row" style="margin-top:8px"><button class="btn secondary" data-mode="style">Style test (10 positions, ~10 min)</button><button class="btn secondary" data-mode="deep">Deep calculation (5 long lines, ~25 min)</button></div>
-      ${last ? `<p class="small" style="margin-top:10px">Last test: ${C.esc(last.date)}, overall ${last.result?.overall ?? "–"}. <a href="#" id="toRes">See results</a></p>` : ""}</div>
+      </div>
+      ${p.tests.some((t) => t.done) ? `<div class="card"><h2>Your tests</h2><div class="scroll"><table><tr><th>Date</th><th>Test</th><th>Positions</th><th>Test rating</th><th></th></tr>
+        ${p.tests.filter((t) => t.done).slice().reverse().map((t) => `<tr><td>${C.esc(t.date)}</td><td>${C.esc(MODES[t.mode]?.name || t.mode)}${t.stopped ? ' <span class="pill">stopped</span>' : ""}</td><td>${t.items.length}</td><td>${t.result && hasRated(t) ? t.result.overall : "–"}</td><td><button class="btn secondary small" data-res="${t.id}">Results</button></td></tr>`).join("")}</table></div></div>` : ""}
       <div class="card" id="aiCard"></div>
       <div class="card"><h2>Training modules</h2><p class="small">Practise one category at a time around your level, without a test score. Your results appear in the Log.</p>
       <div class="row">${TAC_CATS.concat(Object.keys(POS_GROUPS)).concat(Object.keys(EXTRA_CATS)).map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">${C.esc(catLabel(c))}</button>`).join("")}</div></div>`;
     v.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = async () => { await startTest(p, b.dataset.mode, C); C.go("test"); }));
     aiSettings(v.querySelector("#aiCard"));
     v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
-    v.querySelector("#toRes") && (v.querySelector("#toRes").onclick = (e) => { e.preventDefault(); C.go("results"); });
+    v.querySelectorAll("[data-res]").forEach((b) => (b.onclick = () => C.go("results", { id: b.dataset.res })));
     return;
   }
+  if (cur.items.length < cur.plan.length) {
+    v.innerHTML = `<div class="row testbar" style="justify-content:space-between;margin-bottom:12px"><span class="small muted">${C.esc(MODES[cur.mode]?.name || "Test")} · started ${C.esc(cur.date)}</span><button class="btn secondary small" id="stopT">Stop this test</button></div><div id="tItem"></div>`;
+    v.querySelector("#stopT").onclick = () => {
+      if (!confirm(cur.items.length ? `Stop the test now? The ${cur.items.length} position${cur.items.length > 1 ? "s" : ""} you answered are scored.` : "Stop the test? Nothing has been answered yet, so it will be removed.")) return;
+      if (!cur.items.length) { p.tests = p.tests.filter((x) => x !== cur); C.save(); return C.go("test"); }
+      cur.plan = cur.plan.slice(0, cur.items.length); cur.done = true; cur.stopped = true; delete cur.pending;
+      cur.result = computeResult(p, cur); C.save(); C.logEvent("test", `${MODES[cur.mode]?.name || "Test"} stopped after ${cur.items.length} positions`); C.go("results", { id: cur.id });
+    };
+    return runItem(v.querySelector("#tItem"), cur, C, { test: true });
+  }
   if (cur.items.length >= cur.plan.length) { if (cur.noQ && !cur.done) { cur.done = true; cur.result = computeResult(p, cur); C.save(); C.logEvent("test", `${MODES[cur.mode]?.name || "Test"} finished`); return C.go("results"); } return questionnaireView(v, cur, C); }
-  await runItem(v, cur, C, { test: true });
 }
+const hasRated = (t) => t.items.some((i) => i.kind !== "style" && i.rating);
 
 // AI key settings card (used on the test start page, during a test and on the profile page)
 export function aiSettings(el) {
@@ -120,7 +132,7 @@ export function aiSettings(el) {
         <div id="aiMsg" class="small" style="margin-top:6px">${aiKey() ? "✓ AI coach is on." : "AI coach is off."}</div>
         <p class="small muted">Your key stays in this browser only (not in backups or on GitHub). Position, moves and your notes are sent to Google Gemini for the assessment. Free tier: a limited number of requests per minute.</p>`;
   const msg = el.querySelector("#aiMsg");
-  el.querySelector("#aiSave").onclick = () => { const k = el.querySelector("#aiKey").value.trim(); if (!k || k.startsWith("•")) return; setAiKey(k); msg.textContent = "Saved. Click Test to check it."; };
+  el.querySelector("#aiSave").onclick = () => { const k = el.querySelector("#aiKey").value.trim(); if (!k || k.startsWith("•")) { msg.textContent = "Paste your Gemini key in the field first."; el.querySelector("#aiKey").focus(); return; } setAiKey(k); msg.textContent = "Saved. Click Test to check it."; };
   el.querySelector("#aiTest").onclick = async () => { msg.textContent = "Testing…"; try { const r = await testKey(); msg.textContent = r.ok ? `✓ Works (model: ${r.model}).` : "Unexpected answer."; } catch (e) { msg.textContent = "✗ " + (e.message || e); } };
   el.querySelector("#aiDel") && (el.querySelector("#aiDel").onclick = () => { setAiKey(""); aiSettings(el); });
 }
@@ -146,6 +158,9 @@ async function startTest(p, mode, C) {
   C.save(); C.logEvent("test", `${M.name} started (start rating ${elo})`);
 }
 
+// the position that was on screen when the page was reloaded (so a reload doesn't draw a new one)
+async function findItem(kind, id) { const B = await bank(); return (kind === "tac" ? B.TACTICAL : B.POSITIONAL).find((x) => x.id === id) || null; }
+async function findExtra(kind, id) { const B = await extraBank(); return (kind === "style" ? B.STYLEPOS : B.DEEP).find((x) => x.id === id) || null; }
 async function pickItem(cur, slot) {
   const B = await bank();
   const used = new Set(cur.items.map((i) => i.id));
@@ -178,7 +193,7 @@ async function gradeLine(C, fen, user, sol, deadline) {
     const mine = k % 2 === 0, u = user[k];
     if (onSol && k < sol.length && u.uci === sol[k]) {
       pos.move({ from: u.uci.slice(0, 2), to: u.uci.slice(2, 4), promotion: u.uci[4] }); matchPlies++; if (mine) own++;
-      if (pos.isCheckmate()) { notes.push(`${u.san}#: mate, as in the solution.`); break; }
+      if (pos.isCheckmate()) { notes.push(`${u.san}: mate, as in the solution.`); break; }
       continue;
     }
     const before = pos.fen();
@@ -215,13 +230,18 @@ function ideaCheck(text, themes) {
 }
 
 // Runs one position. opts.test → part of a test; otherwise practice (opts.cat, opts.onDone)
-async function runItem(v, cur, C, opts) {
+async function runItem(v0, cur, C, opts) {
+  // fresh container per position: feedback still being prepared for the previous position can't leak into this one
+  v0.innerHTML = ""; const v = document.createElement("div"); v0.appendChild(v);
+  C.engine().cancel();
   const slot = opts.test ? cur.plan[cur.items.length] : { kind: TAC_CATS.includes(opts.cat) ? "tac" : opts.cat === "style" ? "style" : opts.cat === "Deep calculation" ? "deep" : "pos", cat: opts.cat };
   const est = opts.test ? cur.est : opts.est;
   if (slot.kind === "style" || slot.kind === "deep") {
     const used = new Set((opts.used || cur.items).map((i) => i.id));
     const target = (est?.["Deep calculation"] ?? est?.overall ?? 1800) + (Math.random() * 160 - 80);
-    const it = await pickExtra(slot.kind, used, target);
+    const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
+    const it = (pend && (await findExtra(slot.kind, pend))) || (await pickExtra(slot.kind, used, target));
+    if (it && opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
     if (!it) { v.innerHTML = `<div class="card"><p>No more positions of this kind.</p></div>`; return; }
     window.__ccItem = it;
     const title = opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${catLabel(slot.cat)}`;
@@ -234,11 +254,13 @@ async function runItem(v, cur, C, opts) {
     };
     const last = opts.test && cur.items.length + 1 >= cur.plan.length;
     const nextLabel = opts.test ? (last ? (cur.noQ ? "See the results" : "To the questionnaire") : "Next position") : "Next";
-    const onNext = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
+    const onNext = () => (opts.test ? C.go("test") : runItem(v0, cur, C, opts));
     return (slot.kind === "style" ? runStyle : runDeep)(v, C, { it, title, onRecord, nextLabel, onNext });
   }
-  const it = await pickItem({ items: opts.used || cur.items, est }, slot);
+  const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
+  const it = (pend && (await findItem(slot.kind, pend))) || (await pickItem({ items: opts.used || cur.items, est }, slot));
   if (!it) { v.innerHTML = `<div class="card"><p>No more positions in this category.</p></div>`; return; }
+  if (opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
   window.__ccItem = it;
   const fen = it.fen, stm = fen.split(" ")[1];
   const sol = slot.kind === "tac" ? it.sol.split(" ") : [it.best];
@@ -262,7 +284,7 @@ async function runItem(v, cur, C, opts) {
   v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
   const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [], sideHtml = "", sideHold = 0;
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
-  const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
 
   const stepper = (lineSan, startFen) => {
     let i = 0; const b = v.querySelector("#stepBtns");
@@ -319,7 +341,7 @@ async function runItem(v, cur, C, opts) {
       <p class="small muted">How the score works: your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%. Each extra line where your idea holds against another defence, or that you correctly marked ✗ (rejected), adds 5% (max 15%); a wrong first move with accurate calculation after it can still earn up to 40%.</p>
       <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button></div>`;
     stepper(solSan, fen);
-    v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
+    v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v0, cur, C, opts));
   };
 
   const runCalc = async (moves) => {
@@ -330,8 +352,9 @@ async function runItem(v, cur, C, opts) {
     else if (calc.stop) allNotes.push(calc.stop.mine ? `Already at move ${mv(calc.stop.ply)} of your line, ${calc.stop.san} isn't the best follow-up (${calc.stop.better}).` : `Right after your first move the opponent has ${calc.stop.better} (instead of ${calc.stop.san}), which stops your plan.`);
   };
 
-  // stage: position after `pre` plies of the solution; user writes the rest
+  // stage: position after `pre` plies of the solution; user writes the rest (the old "checking…" box is cleared in stage())
   const stage = (pre) => {
+    if (pre > 0) { const fb = v.querySelector("#tfb"); if (fb) fb.innerHTML = ""; }
     const c = new Chess(fen); let last = null;
     for (const u of sol.slice(0, pre)) { const m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); last = [m.from, m.to]; }
     const sfen = c.fen(); brd.setFen(sfen, { last }); brd.setOrientation(stm);
@@ -398,7 +421,7 @@ async function runItem(v, cur, C, opts) {
       const gotOwn = gl.own;
       if (first) depthStart = gotOwn;
       depthTotal = Math.ceil(pre / 2) + gotOwn;
-      if (depthTotal >= nMine || (gl.notes.some((n) => n.includes("mate")) && gotOwn > 0)) { depthTotal = Math.max(depthTotal, nMine); if (first) depthStart = nMine; return finish(first ? `Excellent! You saw the whole line (${nMine} moves) straight away.` : `Solved, after help: ${depthStart} from the start, ${nMine} in total.`); }
+      if (depthTotal >= nMine || (gl.notes.some((n) => n.includes("mate")) && gotOwn > 0)) { depthTotal = Math.max(depthTotal, nMine); if (first) depthStart = nMine; return finish(first ? `Excellent! You saw the whole line (${nMine} move${nMine === 1 ? "" : "s"}) straight away.` : `Solved, after help: ${depthStart} from the start, ${nMine} in total.`); }
       if (gotOwn === 0 && first) { if (parsed.moves.length > 2) await runCalc(parsed.moves); return finish(calc && calc.accurate >= 2 ? "Your first move isn't right, but part of your calculation was." : "Your first move isn't right."); }
       if (!gl.onSol || gotOwn === 0) return finish(first ? `Partly: ${gotOwn} of ${nMine} moves sound.` : `With help you got to ${depthTotal} of ${nMine}.`);
       // continue from the position after the correct moves + the opponent's reply
@@ -413,7 +436,7 @@ export async function practiceView(v, arg, C) {
   const p = C.P(); const cat = arg?.cat || "Calculation";
   const st = (p.practice ||= {})[cat] ||= { est: playerElo(p) - 150, n: 0, solved: 0, used: [] };
   const opts = { cat, est: { overall: st.est }, used: st.used.map((id) => ({ id })),
-    onDone: (rec) => { st.n++; if (rec.score >= 0.99) st.solved++; st.used.push(rec.id); st.used = st.used.slice(-300); st.est += 120 * (rec.score - expected(rec.rating, st.est)); opts.est.overall = st.est; opts.used = st.used.map((id) => ({ id }));
+    onDone: (rec) => { st.n++; if (rec.score >= 0.99) st.solved++; st.used.push(rec.id); st.used = st.used.slice(-300); if (rec.rating) st.est += 120 * (rec.score - expected(rec.rating, st.est)); opts.est.overall = st.est; opts.used = st.used.map((id) => ({ id }));
       C.logEvent("training", `${catLabel(cat)}: ${rec.score >= 0.99 ? "solved" : rec.score > 0 ? "partly" : "missed"} (≈${rec.rating})`); } };
   await runItem(v, null, C, opts);
 }
@@ -488,36 +511,40 @@ const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.lengt
 const pct = (a, k) => (a.length ? Math.round(100 * a.filter((x) => x.character === k).length / a.length) : 0);
 
 // ------------------------------------------------------------------ RESULTS
-export function resultsView(v, C) {
+export function resultsView(v, C, arg) {
   const p = C.P(); const done = (p.tests || []).filter((t) => t.done);
   if (!done.length) { v.innerHTML = `<div class="card"><h2>Results</h2><p>You haven't finished a test yet.</p><button class="btn" id="toT">Take the test</button></div>`; v.querySelector("#toT").onclick = () => C.go("test"); return; }
-  const t = done[done.length - 1];
+  const t = done.find((x) => x.id === arg?.id) || done[done.length - 1];
   const A = Object.keys(p.games || {}).length ? C.aggregate(Object.values(p.games)) : null;
   const R = t.result = computeResult(p, t, A); C.save();
+  const rated = hasRated(t);
   const rows = Object.entries(R.cats).sort((a, b) => a[1].rating - b[1].rating);
   const bar = (val, lo = 600, hi = 2800) => `<div class="bar" style="height:10px"><div style="width:${Math.max(2, Math.min(100, (val - lo) / (hi - lo) * 100))}%"></div></div>`;
-  v.innerHTML = `<div class="card"><h2>Test result (${C.esc(t.date)}, ${C.esc(MODES[t.mode].name)})</h2>
-    <div class="stats"><div class="stat"><div class="v">${R.overall}</div><div class="l">test rating (your games: ${R.elo})</div></div>
-    <div class="stat"><div class="v">${R.tactical}</div><div class="l">tactical</div></div><div class="stat"><div class="v">${R.positional}</div><div class="l">positional</div></div>
+  v.innerHTML = `${done.length > 1 ? `<div class="chips">${done.slice().reverse().slice(0, 8).map((x) => `<button class="chip ${x === t ? "on" : ""}" data-tid="${x.id}">${C.esc(x.date)} · ${C.esc(MODES[x.mode]?.name || x.mode)}</button>`).join("")}</div>` : ""}
+    <div class="card"><h2>${C.esc(MODES[t.mode]?.name || "Test")}, ${C.esc(t.date)}${t.stopped ? " (stopped early)" : ""}</h2>
+    <div class="stats">${rated ? `<div class="stat"><div class="v">${R.overall}</div><div class="l">test rating (your games: ${R.elo})</div></div>
+    ${t.items.some((i) => (i.kind === "tac" || i.kind === "deep") && i.rating) ? `<div class="stat"><div class="v">${R.tactical}</div><div class="l">tactical</div></div>` : ""}${t.items.some((i) => i.kind === "pos") ? `<div class="stat"><div class="v">${R.positional}</div><div class="l">positional</div></div>` : ""}` : `<div class="stat"><div class="v">${t.items.length}</div><div class="l">style positions answered</div></div>`}
     ${R.depth ? `<div class="stat"><div class="v">${R.depth.avg}/${R.depth.avgNeeded}</div><div class="l">calculation depth (moves found / needed)</div></div>` : ""}
     ${R.deep ? `<div class="stat"><div class="v">${R.deep.avg}/${R.deep.avgTotal}</div><div class="l">deep lines: half-moves seen / length</div></div>` : ""}
     ${R.time ? `<div class="stat"><div class="v">${R.time.median}s</div><div class="l">median time to first move</div></div>` : ""}</div>
-    <p class="small muted"><b>Test rating</b> = the rating at which your result would be "expected", worked out from the difficulty (rating) of each position and your score on it, the way a performance rating is calculated in a tournament. Test ratings come from the puzzle ratings (Lichess scale) and your scores. Lichess puzzle ratings tend to run somewhat higher than game ratings, and one test of ${t.items.length} positions gives an indication (±150), not an exact number. Compare above all your <b>categories with each other</b>.</p></div>
-    <div class="card"><h2>Per category (weakest first)</h2><table>${rows.map(([c, x]) => `<tr><td>${C.esc(catLabel(c))}</td><td style="width:40%">${bar(x.rating)}</td><td><b>${x.rating}</b> <span class="small muted">${x.rating - R.elo >= 0 ? "+" : ""}${x.rating - R.elo} vs Elo · ${x.n} pos.</span></td><td><button class="btn secondary small" data-prac="${C.esc(c)}">Train</button></td></tr>`).join("")}</table></div>
+    ${rated ? `<p class="small muted"><b>Test rating</b> = the rating at which your result would be "expected", worked out from the difficulty (rating) of each position and your score on it, the way a performance rating is calculated in a tournament. Test ratings come from the puzzle ratings (Lichess scale) and your scores. Lichess puzzle ratings tend to run somewhat higher than game ratings, and one test of ${t.items.length} positions gives an indication (±150), not an exact number. Compare above all your <b>categories with each other</b>.</p>` : ""}</div>
+    ${rows.length ? `<div class="card"><h2>Per category (weakest first)</h2><table>${rows.map(([c, x]) => `<tr><td>${C.esc(catLabel(c))}</td><td style="width:40%">${bar(x.rating)}</td><td><b>${x.rating}</b> <span class="small muted">${x.rating - R.elo >= 0 ? "+" : ""}${x.rating - R.elo} vs Elo · ${x.n} pos.</span></td><td><button class="btn secondary small" data-prac="${C.esc(c)}">Train</button></td></tr>`).join("")}</table></div>` : ""}
     ${R.style ? `<div class="card"><h2>Your style choices (${R.style.n} style positions)</h2><p class="small muted">Positions with several good moves of a different kind: which kind did you choose?</p>
       ${["attack", "solid", "positional", "trade"].map((k) => `<div style="display:grid;grid-template-columns:150px 1fr 42px;gap:8px;align-items:center;margin:6px 0"><b class="small">${STYLES[k].label}</b><div class="bar" style="height:10px"><div style="width:${R.style[k]}%"></div></div><span>${R.style[k]}%</span></div>`).join("")}
       <p class="small">${R.style.theory !== null ? `In opening positions you chose the <b>book move ${R.style.theory}%</b> of the time. ` : ""}${R.style.sound}% of your choices were sound (one of the good moves).
       ${(() => { const top = ["attack", "solid", "positional", "trade"].sort((x, y) => R.style[y] - R.style[x])[0]; return R.style[top] >= 40 ? `You clearly prefer <b>${STYLES[top].label.toLowerCase()}</b> moves.` : "Your choices are mixed: no single kind dominates."; })()}</p></div>` : ""}
     ${R.deep ? `<div class="card"><h2>Deep calculation (${R.deep.n} lines)</h2><p class="small">In lines where every move is the only move, you saw on average <b>${R.deep.avg} of ${R.deep.avgTotal}</b> half-moves (your moves and your opponent's only replies). Furthest: ${R.deep.best} half-moves. Whole line seen: ${R.deep.full} of ${R.deep.n}.</p></div>` : ""}
-    <div class="card"><h2>How do you think?</h2><ul class="small">
+    ${rated ? `<div class="card"><h2>How do you think?</h2><ul class="small">
       ${R.depth ? `<li><b>Calculation depth:</b> on positions with 2+ moves, you saw on average <b>${R.depth.avg} of ${R.depth.avgNeeded}</b> of your moves <b>from the start</b>, and <b>${R.depth.avgHelp}</b> once the first moves had been played for you. ${R.depth.full}/${R.depth.n} completely right from the start. ${R.depth.avgHelp - R.depth.avg >= 0.7 ? "Big gap between 'from the start' and 'with help': you do find the moves, but you don't see them far enough ahead. Train by calculating long puzzles without moving the pieces, and write down the whole line." : R.depth.avg / R.depth.avgNeeded < 0.6 ? "You often stop calculating too early: keep going until the position is quiet (no more checks or captures)." : "You calculate lines through well."}</li>` : ""}
 
       ${R.time ? `<li><b>Time:</b> median ${R.time.median}s to your first move${R.time.correct ? `; right answers ${R.time.correct}s` : ""}${R.time.wrong ? `, wrong answers ${R.time.wrong}s` : ""}. ${R.time.wrong && R.time.correct && R.time.wrong < R.time.correct * 0.7 ? "Your wrong answers came faster than your right ones: you play too quickly when you think you see it. Do a blunder check!" : ""}</li>` : ""}
       ${R.ai ? `<li><b>Depth of understanding</b> (AI coach, ${R.ai.n} positions): you saw the <b>idea</b> in ${R.ai.idea}%, the <b>danger</b> in ${R.ai.danger}% and the <b>follow-up & plan</b> in ${R.ai.followup}% of positions. ${R.ai.danger < R.ai.idea - 15 ? "You often see the idea but not the danger behind it: before you play, ask what goes wrong after the most obvious follow-up." : R.ai.followup < R.ai.danger - 15 ? "You see the ideas and dangers, but the follow-up plan is the next step: what do you play AFTER the first moves?" : ""}${R.ai.rejected ? ` ${R.ai.rejected}× you rejected the right move for the right reason (half right).` : ""}</li>` : ""}
-      <li><b>Character of your moves:</b> ${R.character.aggressive}% aggressive (check, capture, toward the king), ${R.character.solid}% solid. ${R.character.nWrong ? `Of your wrong answers, ${R.character.wrongAggressive}% were aggressive and ${R.character.wrongSolid}% solid.` : ""}</li></ul></div>
+      <li><b>Character of your moves:</b> ${R.character.aggressive}% aggressive (check, capture, toward the king), ${R.character.solid}% solid. ${R.character.nWrong ? `Of your wrong answers, ${R.character.wrongAggressive}% were aggressive and ${R.character.wrongSolid}% solid.` : ""}</li></ul></div>` : ""}
+
     <div class="card"><h2>Your answers</h2><div class="scroll"><table><tr><th>#</th><th>Category</th><th>Rating</th><th>Your line</th><th>Solution</th><th>Depth</th><th>Score</th><th>Time</th><th>Your reasoning</th></tr>
       ${t.items.map((i, k) => `<tr><td>${k + 1}</td><td class="small">${C.esc(catLabel(i.cat))}</td><td>${i.rating ?? "–"}</td><td class="small">${C.esc(i.line || i.move || "–")}${i.kind === "style" ? ` <span class="muted">(${C.esc(STYLES[i.style]?.label || "")}${i.theory ? ", book" : ""})</span>` : ""}</td><td class="small">${C.esc(i.solution || (i.kind === "style" ? "several good moves" : ""))}</td><td class="small">${i.kind === "tac" ? `${i.depth}${(i.depthTotal ?? i.depth) > i.depth ? `→${i.depthTotal}` : ""}/${i.nMine}` : "–"}</td><td>${Math.round(i.score * 100)}%</td><td>${Math.round(i.timeMs / 1000)}s</td><td class="small">${C.esc(i.why || "")}</td></tr>`).join("")}</table></div>
       <div class="row" style="margin-top:8px"><button class="btn secondary" id="copyT">Copy for Claude (feedback on my reasoning)</button><button class="btn" id="toProf">See my player profile</button></div></div>`;
+  v.querySelectorAll("[data-tid]").forEach((b) => (b.onclick = () => C.go("results", { id: b.dataset.tid })));
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
   v.querySelector("#toProf").onclick = () => C.go("profile");
   v.querySelector("#copyT").onclick = () => C.copy(`Chess test. Give feedback on my REASONING per position (not just the move): what did I see right, what did I miss, and what does that say about how I think?\nMy rating: ${R.elo}. Test rating ${R.overall} (tactical ${R.tactical}, positional ${R.positional}).\n\n` +
@@ -525,9 +552,24 @@ export function resultsView(v, C) {
 }
 
 // ------------------------------------------------------------------ PROFILE
+// The player profile combines tests: the regular positions of the latest regular test (quick/full/stopped),
+// plus the style and deep positions of all tests, plus the latest questionnaire. A Style or Deep test alone
+// therefore never overwrites the profile.
+export function profileTest(p) {
+  const done = (p.tests || []).filter((t) => t.done);
+  if (!done.length) return null;
+  const base = done.filter((t) => t.items.some((i) => i.kind === "tac" || i.kind === "pos")).slice(-1)[0];
+  const seen = new Set(); const items = [];
+  const extra = done.flatMap((t) => t.items.filter((i) => i.kind === "style" || i.kind === "deep")).slice(-40);
+  for (const i of (base ? base.items.filter((i) => i.kind === "tac" || i.kind === "pos") : []).concat(extra)) { const k = i.kind + i.id; if (!seen.has(k)) { seen.add(k); items.push(i); } }
+  const q = (base?.q && Object.keys(base.q).length ? base.q : done.slice().reverse().find((t) => t.q && Object.keys(t.q).length)?.q) || {};
+  if (!items.some((i) => i.kind !== "style") && !Object.keys(q).length) return null; // style positions alone don't make a profile
+  const ref = base || done[done.length - 1];
+  return { ...ref, items, q, merged: true };
+}
 export function profileView(v, C) {
   const p = C.P();
-  const t = (p.tests || []).filter((x) => x.done).slice(-1)[0];
+  const t = profileTest(p);
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
   if (!t && !A) { v.innerHTML = `<div class="card"><h2>Player profile</h2><p>Analyse your games (Analyse → Games) and/or take the test first.</p></div><div class="card" id="aiCardP"></div>`; aiSettings(v.querySelector("#aiCardP")); return; }
@@ -605,7 +647,7 @@ function repertoireFromGames(A) {
 // Player type + aggression for the rest of the app (home, openings): from the latest test, otherwise from the games.
 export function currentStyle(p, C) {
   if (!p) return null;
-  const t = (p.tests || []).filter((x) => x.done).slice(-1)[0];
+  const t = profileTest(p);
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
   if (!t && !A) return null;

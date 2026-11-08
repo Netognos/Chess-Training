@@ -116,7 +116,7 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
   }
   if (tempting.length) concepts.add("unpin");
   // 5. alternatives
-  const alts = top.filter((l) => l.pv[0] !== best).map((l) => ({ san: new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san, cp: lineToCp(l) }));
+  const alts = top.filter((l, i, all) => l.pv[0] && l.pv[0] !== best && all.findIndex((o) => o.pv[0] === l.pv[0]) === i).map((l) => ({ san: new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san, cp: lineToCp(l) }));
 
   // 6. compare with what the player wrote
   const text = (userText + " " + userLine).toLowerCase();
@@ -134,7 +134,7 @@ export function explainHtml(x, esc) {
   const ok = x.conceptCheck.filter((c) => c.hit), miss = x.conceptCheck.filter((c) => !c.hit);
   return `<div class="card" style="margin-top:10px"><h3 style="margin-top:0">Why ${esc(x.san)}?</h3>
     <ul class="small">${x.facts.map((f) => `<li>${esc(f)}</li>`).join("")}${x.tempting.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
-    ${x.alts.length ? `<p class="small muted">Engine: ${esc(x.san)} ${(x.bestCp / 100 >= 0 ? "+" : "") + (x.bestCp / 100).toFixed(1)}; alternatives ${x.alts.map((a) => `${esc(a.san)} ${(a.cp / 100 >= 0 ? "+" : "") + (a.cp / 100).toFixed(1)}`).join(", ")} (from your point of view).</p>` : ""}
+    ${x.alts.length ? `<p class="small muted">Engine: ${esc(x.san)} ${fmt(x.bestCp)}; alternatives ${x.alts.map((a) => `${esc(a.san)} ${fmt(a.cp)}`).join(", ")} (from your point of view).</p>` : ""}
     <h3>Your thoughts compared</h3>
     ${x.conceptCheck.length ? `<ul class="small">${ok.map((c) => `<li>✓ You saw: <b>${esc(c.label)}</b></li>`).join("")}${miss.map((c) => `<li>✗ Not in your notes: <b>${esc(c.label)}</b></li>`).join("")}</ul>` : ""}
     ${x.mentioned.length ? `<p class="small">Moves in your notes: ${x.mentioned.map((t) => (x.hitMoves.includes(t) ? `<b>${esc(t)} ✓</b>` : esc(t))).join(", ")}${x.hitMoves.length ? " (✓ = also in the engine's main line)." : "."}</p>` : ""}

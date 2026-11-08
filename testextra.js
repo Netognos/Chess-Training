@@ -69,7 +69,7 @@ export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext })
         <p class="small muted">${Object.entries(STYLES).map(([, s]) => `<b>${s.label}</b>: ${s.desc}`).join(" · ")}</p></div>
       <div class="row" style="margin-top:10px"><button class="btn" id="nextIt">${C.esc(nextLabel)}</button></div>`;
     v.querySelector("#nextIt").onclick = onNext;
-    fb.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    fb.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
   };
 }
 
@@ -138,7 +138,7 @@ export async function runDeep(v, C, { it, title, onRecord, nextLabel, onNext }) 
     b.querySelector("#sBack").onclick = () => { i = Math.max(0, i - 1); draw(); };
     b.querySelector("#sFwd").onclick = () => { i = Math.min(solSan.length, i + 1); draw(); };
     v.querySelector("#nextIt").onclick = onNext;
-    fb.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    fb.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
   };
 }
 

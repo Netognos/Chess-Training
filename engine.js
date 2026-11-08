@@ -1,12 +1,15 @@
 // Stockfish UCI wrapper. Works with a Web Worker (browser) or any object
 // with postMessage/onmessage-style plumbing (see makeNodeTransport in tests).
 
+const CANCELLED = Symbol("cancelled");
+
 export class Engine {
   constructor(transport) {
     this.t = transport;
     this.listeners = new Set();
     this.t.onLine = (line) => this.listeners.forEach((f) => f(line));
     this.queue = Promise.resolve();
+    this.gen = 0; this.busy = false; this.tags = {}; this.runTag = null;
     this.ready = this._wait("uci", "uciok").then(() => {
       this.t.send("setoption name Hash value 32");
       return this._wait("isready", "readyok");
@@ -15,7 +18,7 @@ export class Engine {
 
   static browser(url = "vendor/stockfish/stockfish-19-lite-single.js") {
     const w = new Worker(url);
-    const t = { send: (c) => w.postMessage(c), onLine: null };
+    const t = { send: (c) => w.postMessage(c), onLine: null, terminate: () => w.terminate() };
     w.onmessage = (e) => { if (typeof e.data === "string" && t.onLine) e.data.split("\n").forEach((l) => l && t.onLine(l)); };
     w.onerror = (e) => console.error("Stockfish worker error", e);
     return new Engine(t);
@@ -35,9 +38,22 @@ export class Engine {
   }
 
   // Returns [{multipv, cp, mate, pv:[uci...], depth}] with scores from the SIDE TO MOVE's point of view.
-  analyse(fen, { movetime = 150, depth = null, multipv = 1 } = {}) {
+  // Drops all queued work and stops the running search. Callers of cancelled jobs never get an answer
+  // (their page is gone), so no stale result can land on the new page.
+  terminate() { this.gen++; this.t.terminate?.(); }
+  // cancel() drops everything (used on navigation); cancel(tag) only drops jobs started with that tag
+  // (e.g. the board's own analysis lines), so other work on the same page keeps going.
+  cancel(tag) {
+    if (tag) { this.tags[tag] = (this.tags[tag] || 0) + 1; if (this.busy && this.runTag === tag) this.t.send("stop"); return; }
+    this.gen++; if (this.busy) this.t.send("stop");
+  }
+  analyse(fen, { movetime = 150, depth = null, multipv = 1, tag = null } = {}) {
+    const g = this.gen, tg = tag ? this.tags[tag] || 0 : 0;
+    const stale = () => g !== this.gen || (tag && (this.tags[tag] || 0) !== tg);
     const job = async () => {
       await this.ready;
+      if (stale()) return CANCELLED;
+      this.busy = true; this.runTag = tag;
       const lines = new Map();
       const done = new Promise((res) => {
         const f = (l) => {
@@ -62,11 +78,13 @@ export class Engine {
       this.t.send(`position fen ${fen}`);
       this.t.send(depth ? `go depth ${depth}` : `go movetime ${movetime}`);
       await done;
+      this.busy = false; this.runTag = null;
+      if (stale()) return CANCELLED;
       return [...lines.values()].sort((a, b) => a.multipv - b.multipv);
     };
-    const p = this.queue.then(job);
-    this.queue = p.catch(() => {});
-    return p;
+    const run = this.queue.then(job);
+    this.queue = run.then(() => {}, () => {});
+    return run.then((r) => (r === CANCELLED ? new Promise(() => {}) : r));
   }
 }
 

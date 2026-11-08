@@ -89,14 +89,18 @@ function terminal(fen) {
 async function evaluate(engine, g, color, opts, onPos) {
   const n = g.fens.length;
   const evals = new Array(n).fill(null);
-  const havePgn = g.pgnEvals.slice(1).every((v) => v !== null) && n > 1;
+  // server evals (Lichess) are used when most moves have one; the engine fills in the gaps
+  const present = g.pgnEvals.slice(1).filter((v) => v !== null).length;
+  const havePgn = n > 1 && present / (n - 1) >= 0.8;
   const need = new Set();
   if (havePgn) {
     evals[0] = { cp: 20, pv: null };
-    for (let i = 1; i < n; i++) evals[i] = terminal(g.fens[i]) || { cp: g.pgnEvals[i], pv: null };
+    for (let i = 1; i < n; i++) evals[i] = terminal(g.fens[i]) || (g.pgnEvals[i] !== null ? { cp: g.pgnEvals[i], pv: null } : null);
+    for (let i = 1; i < n; i++) if (!evals[i]) need.add(i);
     const sign = color === "w" ? 1 : -1;
     for (let i = 0; i < n - 1; i++) {
       if (g.fens[i].split(" ")[1] !== color) continue;
+      if (!evals[i] || !evals[i + 1]) { need.add(i); need.add(i + 1); continue; }
       const drop = winPct(sign * evals[i].cp) - winPct(sign * evals[i + 1].cp);
       if (drop >= 10) { need.add(i); need.add(i + 1); }
     }
@@ -114,7 +118,7 @@ async function evaluate(engine, g, color, opts, onPos) {
       const stm = g.fens[i].split(" ")[1];
       const cp = lineToCp(line);
       evals[i] = { cp: stm === "w" ? cp : -cp, pv: line ? line.pv : [] };
-      if (line && !cheap) depths.push(line.depth);
+      if (line && !cheap && line.mate == null) depths.push(line.depth); // mate searches report huge depths
     }
     onPos && onPos(++k, need.size);
   }
@@ -235,7 +239,7 @@ export function aggregate(games) {
   A.errorCounts = {}; for (const e of errs) A.errorCounts[e.label] = (A.errorCounts[e.label] || 0) + 1;
   const serious = errs.filter((e) => e.label !== "inaccuracy");
   A.seriousPer100 = {}; for (const p of Object.keys(cnt)) A.seriousPer100[p] = +(100 * serious.filter((e) => e.phase === p).length / cnt[p]).toFixed(1);
-  A.tags = {}; for (const e of serious) for (const t of e.tags) A.tags[t] = (A.tags[t] || 0) + 1;
+  A.tags = {}; for (const e of serious) for (const t of e.tags || []) A.tags[t] = (A.tags[t] || 0) + 1;
   A.tags = Object.fromEntries(Object.entries(A.tags).sort((a, b) => b[1] - a[1]));
   const op = {}; for (const g of games) (op[`${g.color}|${g.opening}`] ||= []).push(g);
   A.openings = Object.entries(op).map(([k, v]) => {
@@ -254,7 +258,7 @@ export function aggregate(games) {
   if (sg.length) {
     const T = { moves: 0, checks: 0, captures: 0, advances: 0, kingZone: 0, sacSound: 0, sacUnsound: 0, storm: 0 };
     const acc = { ahead: { n: 0, sum: 0 }, equal: { n: 0, sum: 0 }, behind: { n: 0, sum: 0 } };
-    for (const g of sg) { for (const k in T) T[k] += g.style[k] || 0; for (const k in acc) { acc[k].n += g.style.acc[k].n; acc[k].sum += g.style.acc[k].sum; } }
+    for (const g of sg) { for (const k in T) T[k] += g.style[k] || 0; for (const k in acc) { acc[k].n += g.style.acc?.[k]?.n || 0; acc[k].sum += g.style.acc?.[k]?.sum || 0; } }
     const per = (k) => +(100 * T[k] / Math.max(1, T.moves)).toFixed(1);
     A.style = {
       games: sg.length, checksPct: per("checks"), capturesPct: per("captures"), advancesPct: per("advances"), kingZonePct: per("kingZone"),

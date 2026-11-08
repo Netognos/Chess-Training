@@ -87,7 +87,9 @@ export class Board {
     if (this.intercept) {
       if (this.sel && this.sel !== sq && (!this.targetsFor || this.targetsFor(this.sel).includes(sq))) { this._attempt(this.sel, sq); return; }
       const vp = this.pieceAt ? this.pieceAt(sq) : p;
-      if (vp) { this.sel = sq; this.render(); this._startDrag(e, sq, this.grid.querySelector(`[data-sq="${sq}"]`)); } else { this.sel = null; this.render(); }
+      if (vp) { this.sel = sq; this.render(); this._startDrag(e, sq, this.grid.querySelector(`[data-sq="${sq}"]`)); return; }
+      if (this.sel && this.sel !== sq) { this._attempt(this.sel, sq); return; } // not possible: the line builder says why
+      this.sel = null; this.render();
       return;
     }
     if (this.sel && this.sel !== sq) {
@@ -100,19 +102,20 @@ export class Board {
 
   _startDrag(e, from, cell) {
     const img = cell && cell.querySelector("img");
-    if (!img) { // a piece that is only "there" in the line: drag without a picture
-      const up0 = (ev) => { window.removeEventListener("pointerup", up0); const under = document.elementFromPoint(ev.clientX, ev.clientY); const t = under && under.closest(".sq"); if (t && t.dataset.sq !== from && this.el.contains(t)) this._attempt(from, t.dataset.sq); };
-      window.addEventListener("pointerup", up0); return;
-    }
-    const ghost = img.cloneNode(); ghost.className = "ghost"; const size = cell.getBoundingClientRect().width;
+    // in a line, the piece that really stands here can differ from the picture (or there is no picture)
+    const vp = this.pieceAt ? this.pieceAt(from) : null;
+    const src = vp ? IMG[vp.color === "w" ? vp.type.toUpperCase() : vp.type] : img?.src;
+    if (!src) return;
+    const ghost = document.createElement("img"); ghost.src = src; ghost.className = "ghost"; ghost.draggable = false;
+    const size = cell.getBoundingClientRect().width;
     ghost.style.width = ghost.style.height = size + "px"; document.body.appendChild(ghost);
     let moved = false;
     const pos = (ev) => { ghost.style.left = ev.clientX - size / 2 + "px"; ghost.style.top = ev.clientY - size / 2 + "px"; };
-    pos(e); img.style.opacity = 0.35;
+    pos(e); if (img) img.style.opacity = 0.35;
     const mv = (ev) => { moved = true; pos(ev); };
     const up = (ev) => {
       window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
-      ghost.remove(); img.style.opacity = 1;
+      ghost.remove(); if (img) img.style.opacity = 1;
       if (!moved) return;
       const under = document.elementFromPoint(ev.clientX, ev.clientY);
       const t = under && under.closest(".sq");

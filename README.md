@@ -14,7 +14,7 @@ A personal chess trainer that runs entirely in your browser: on your laptop or y
 - **Log**: everything you do is logged per player, along with your next steps and repertoire notes. You can export it as Markdown, and back up or restore everything as JSON.
 
 **Part 2: Test & profile**
-- **Position test** (quick: 12 positions, full: 32): adaptive to your level. You play your move, write down *why* and which line you calculated. It measures your score per category, your calculation depth (how many moves of the solution you find), your time, and the character of your moves.
+- **Position test** (quick: 15 positions, full: 39, plus a 10-position Style test and a 5-line Deep calculation test): adaptive to your level. You put your line on the board (the pieces stay put) or type it, and write down *why*. Extra lines for other defences can be marked ✓/✗ and are checked by Stockfish. It measures your score per category, your calculation depth (how many moves of the solution you find), your time, and the character of your moves.
   - Tactical positions: Lichess puzzle database (CC0), rated 600-3000, categorised by Chess Coach into attack & mate, defence, calculation, sacrifice, quiet move and endgame.
   - Positional positions: [neilgd/chess-position-analysis-results](https://github.com/neilgd/chess-position-analysis-results) (MIT): 2,204 positional puzzles selected and classified by WIM/FM Liwia Jarocka, WGM Michalina Rudzińska and WGM Margarita Voyska.
   - The approach follows IM Igor Khmelnitsky's *Chess Exam and Training Guide* (a rating per category instead of one overall number).

@@ -53,7 +53,7 @@ export class LineBuilder {
       const nm = prefix.concat([mv]);
       const same = this.lines.findIndex((l) => nm.every((x, i) => l.moves[i]?.uci === x.uci));
       if (same >= 0) { this.cur = same; this.cursor = nm.length; }
-      else if (this.lines.length >= this.maxLines) { this.msg = `Maximum ${this.maxLines} lines. Delete one first.`; }
+      else if (this.lines.length >= this.maxLines) { this.msg = this.maxLines === 1 ? "Only one line here: use Undo or click a move to change it." : `Maximum ${this.maxLines} lines. Delete one first.`; }
       else { const nl = { moves: nm }; this.lines.push(nl); this.cur = this.lines.length - 1; this.cursor = nm.length; this.hist.push({ line: nl, created: true }); }
     }
     this.render(); this.onChange();
@@ -186,7 +186,7 @@ export async function sideReport({ gradeMove, eng, root, main, sides, ms = 400 }
     else if (!r.holds) { verdict = "½ playable, but there is something better"; cls = "warn"; }
     else if (r.answer) { verdict = `? you didn't give your answer. Best is ${r.answer.san} (${ev(r.answer.cp)})`; cls = "info"; }
     else { verdict = `✓ holds${r.endCp != null ? ` (${ev(r.endCp)})` : ""}`; cls = "ok"; }
-    if (s.verdict === "good" && works && judged === null) { judged = true; verdict = "✓ " + verdict.replace(/^✓ /, ""); }
+    if (s.verdict === "good" && works && judged === null) { judged = true; if (!verdict.startsWith("✓")) verdict = `✓ you were right, it works${r.answer ? `. Your next move would be ${r.answer.san}` : ""}`; }
     items.push({ line: s.i + 1, title: (s.verdict === "bad" ? "Rejected: " : "") + title, verdict, cls, notes: r.notes, kind: r.kind, mark: s.verdict, judged, holds: r.stopped === null && r.holds && !r.answer, san: mv.san, text: fmt(root, s.moves) });
   }
   // serious defences after your first move: are they all in your lines?
