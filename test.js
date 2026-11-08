@@ -6,6 +6,39 @@ import { Board } from "./board.js";
 import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { aiKey, setAiKey, testKey, rubricFrom, judgeReasoning } from "./ai.js";
+import { lineToCp, winPct } from "./engine.js";
+import { pvToSan } from "./analysis.js";
+
+// Engine wrapper that remembers every analysis, so work done in the background while you think is reused when you submit.
+function cachedEngine(eng) {
+  const memo = new Map();
+  return { ready: eng.ready, analyse(fen, o = {}) { const k = `${fen}|${o.movetime || 150}|${o.multipv || 1}|${o.depth || ""}`; if (!memo.has(k)) memo.set(k, eng.analyse(fen, o)); return memo.get(k); } };
+}
+async function gradeWith(eng, fen, uci, movetime = 700) {
+  const [best] = await eng.analyse(fen, { movetime });
+  const c = new Chess(fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+  let after;
+  if (c.isCheckmate()) after = 10000; else if (c.isDraw()) after = 0; else { const [l] = await eng.analyse(c.fen(), { movetime }); after = -lineToCp(l); }
+  const bcp = lineToCp(best); const drop = Math.max(0, winPct(bcp) - winPct(after));
+  return { drop, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8) };
+}
+// How far does the calculation hold up, even when the first move was wrong? After your first move, every reply you
+// expected is compared with the opponent's best defence and every follow-up of yours with the best continuation.
+async function calcCheck(eng, fen, moves, maxPlies = 16) {
+  const c = new Chess(fen); let accurate = 0, stop = null;
+  c.move(moves[0].san);
+  for (let k = 1; k < Math.min(moves.length, maxPlies); k++) {
+    if (c.isGameOver()) break;
+    const pos = c.fen(); const u = moves[k];
+    const [b] = await eng.analyse(pos, { movetime: 300 });
+    if (b?.pv[0] !== u.uci) {
+      const g = await gradeWith(eng, pos, u.uci, 300);
+      if (g.drop >= (k % 2 === 1 ? 8 : 5)) { stop = { ply: k, mine: k % 2 === 0, san: u.san, better: g.bestLine.split(" ")[0] }; break; }
+    }
+    accurate++; c.move(u.san);
+  }
+  return { accurate, plies: moves.length - 1, stop };
+}
 
 let BANK = null;
 async function bank() { if (!BANK) BANK = await import("./testbank.js"); return BANK; }
@@ -185,6 +218,13 @@ async function runItem(v, cur, C, opts) {
       <div class="small" style="margin:6px 0">AI coach: ${aiKey() ? "<b>on</b>" : "<b>off</b>"} · <a href="#" id="aiToggle">${aiKey() ? "settings" : "set up (free)"}</a></div><div id="aiInline" class="card hidden"></div>
       <div id="stage"></div><div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
+  // background: while you think, Stockfish already works out the solution and evaluates the position
+  const ceng = cachedEngine(C.engine());
+  const rootMs = slot.kind === "pos" ? 1200 : 700;
+  const preX = explainMove(ceng, fen, sol[0], "", "").catch(() => null);
+  preX.then(() => ceng.analyse(fen, { movetime: rootMs })).catch(() => {});
+  let aiPromise = null, calc = null;
+  const Cg = { ...C, gradeMove: (f, u, ms) => gradeWith(ceng, f, u, ms) }; window.__ccEng = ceng;
   v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
   const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [];
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
@@ -205,21 +245,16 @@ async function runItem(v, cur, C, opts) {
     let base;
     if (slot.kind === "pos") base = moveScore ?? 0;
     else base = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
+    // partial credit for calculation that held up for a while, even if the first move was wrong
+    let calcCredit = 0;
+    if (calc && calc.accurate >= 2 && base < 0.4) { calcCredit = Math.min(slot.kind === "pos" ? 0.3 : 0.4, (slot.kind === "pos" ? 0.3 : 0.4) * calc.accurate / Math.max(6, sol.length)); base = Math.max(base, calcCredit); }
     v.querySelector("#stage").innerHTML = "";
     const useAI = !!aiKey() && !!(ideaTxt || lineTxt);
     v.querySelector("#tfb").innerHTML = `<div class="feedback info">${C.esc(note)}<br><span class="small">Stockfish is working out why ${C.esc(solSan[0])} is the move${useAI ? ", and the AI coach is reading your reasoning" : ""}…</span></div>`;
     scrollFb();
     let x = null, ai = null, aiErr = null;
-    try { x = await explainMove(C.engine(), fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); }
-    if (useAI && x) {
-      try {
-        const [top] = await C.engine().analyse(fen, { movetime: 600 });
-        ai = await judgeReasoning({ fen, side: stm === "w" ? "White" : "Black", category: catLabel(slot.cat), rating: it.r, solution: solSan.join(" "),
-          engineLine: x.facts.find((f) => f.includes("Main line")) || solSan.join(" "), evalText: `${x.san} ${(x.bestCp / 100).toFixed(1)} for the player`,
-          alternatives: x.alts.map((a) => `${a.san} ${(a.cp / 100).toFixed(1)}`).join(", ") || "-", rubric: rubricFrom(x, solSan.join(" ")),
-          userMove: firstMove, userLine: lineTxt + (sideTxt.length ? " || Other lines the player considered: " + sideTxt.join(" ; ") : ""), userNotes: ideaTxt });
-      } catch (e) { aiErr = e.message || String(e); console.warn(e); }
-    }
+    if (aiPromise) { const r = await aiPromise; x = r.x; ai = r.ai; aiErr = r.aiErr; }
+    else { try { x = await explainMove(ceng, fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); } }
     let score = base;
     if (ai) { score = 0.5 * base + 0.5 * ai.understanding; if (base < 0.5 && ai.rejected) score = Math.max(score, 0.45); }
     const rec = { id: it.id, kind: slot.kind, cat: slot.cat, rating: it.r, fen, score, moveScore: base, depth: depthStart ?? 0, depthTotal, stages, nMine,
@@ -250,6 +285,14 @@ async function runItem(v, cur, C, opts) {
     v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v, cur, C, opts));
   };
 
+  const runCalc = async (moves) => {
+    v.querySelector("#tfb").innerHTML = `<div class="feedback info">Checking how far your calculation held up…</div>`;
+    try { calc = await calcCheck(ceng, fen, moves); } catch (e) { console.warn(e); return; }
+    const mv = (ply) => Math.floor(ply / 2) + 1;
+    if (calc.accurate >= 2) allNotes.push(`Your calculation after your first move held up for ${calc.accurate} of ${calc.plies} half-moves: you predicted the opponent's best replies and found the best follow-ups.${calc.stop ? ` It breaks at move ${mv(calc.stop.ply)} of your line: ${calc.stop.mine ? `${calc.stop.san} isn't the best continuation (${calc.stop.better} is)` : `instead of ${calc.stop.san} your opponent has ${calc.stop.better}, which stops your plan`}.` : ""} That earns partial credit.`);
+    else if (calc.stop) allNotes.push(calc.stop.mine ? `Already at move ${mv(calc.stop.ply)} of your line, ${calc.stop.san} isn't the best follow-up (${calc.stop.better}).` : `Right after your first move the opponent has ${calc.stop.better} (instead of ${calc.stop.san}), which stops your plan.`);
+  };
+
   // stage: position after `pre` plies of the solution; user writes the rest
   const stage = (pre) => {
     const c = new Chess(fen); let last = null;
@@ -278,30 +321,47 @@ async function runItem(v, cur, C, opts) {
       if (sides.length) {
         v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your ${sides.length} extra line${sides.length > 1 ? "s" : ""}…</div>`;
         for (const s of sides.slice(0, 4)) {
-          const r = await checkLine(C.gradeMove, sfen, s.moves, { ms: 350, maxPlies: 6 });
+          const r = await checkLine(Cg.gradeMove, sfen, s.moves, { ms: 350, maxPlies: 6 });
           const t = fmtLine(sfen, s.moves); sideTxt.push(t);
           allNotes.push(`Line ${s.i + 1} (${t}): ${r.holds ? "holds up" : r.stopped !== null ? "breaks down" : "partly OK"}. ${r.notes.join(" · ")}`);
         }
         v.querySelector("#submit").disabled = false;
       }
-      if (first) { tSubmit = Date.now(); ideaTxt = v.querySelector("#why").value; lineTxt = txt; const m0 = new Chess(fen).move(parsed.moves[0].san); firstMove = m0.san; character = moveCharacter(fen, m0); }
+      if (first) {
+        tSubmit = Date.now(); ideaTxt = v.querySelector("#why").value; lineTxt = txt; const m0 = new Chess(fen).move(parsed.moves[0].san); firstMove = m0.san; character = moveCharacter(fen, m0);
+        // the explanation + AI judge start right away (in parallel with checking your line); they judge what you saw on your own
+        aiPromise = (async () => {
+          let x = null, ai = null, aiErr = null;
+          try { x = await explainMove(ceng, fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); }
+          if (aiKey() && (ideaTxt || lineTxt) && x) {
+            try {
+              ai = await judgeReasoning({ fen, side: stm === "w" ? "White" : "Black", category: catLabel(slot.cat), rating: it.r, solution: solSan.join(" "),
+                engineLine: x.facts.find((f) => f.includes("Main line")) || solSan.join(" "), evalText: `${x.san} ${(x.bestCp / 100).toFixed(1)} for the player`,
+                alternatives: x.alts.map((a) => `${a.san} ${(a.cp / 100).toFixed(1)}`).join(", ") || "-", rubric: rubricFrom(x, solSan.join(" ")),
+                userMove: firstMove, userLine: lineTxt + (sideTxt.length ? " || Other lines the player considered: " + sideTxt.join(" ; ") : ""), userNotes: ideaTxt });
+            } catch (e) { aiErr = e.message || String(e); console.warn(e); }
+          }
+          return { x, ai, aiErr };
+        })();
+      }
       else lineTxt += " | " + txt;
       v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your line…</div>`; scrollFb();
       stages++;
       if (slot.kind === "pos") {
         const u = parsed.moves[0];
         if (u.uci === sol[0]) { moveScore = 1; allNotes.push(`${u.san}: exactly the move the grandmaster panel chose.`); }
-        else { const g = await C.gradeMove(fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance).` : `${u.san}: not the right idea (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
-        if (parsed.moves.length > 2) { const gl = await gradeLine(C, fen, parsed.moves, sol); if (gl.own > 1) allNotes.push(`Your follow-up holds up for ${gl.own} of your moves.`); }
+        else { const g = await gradeWith(ceng, fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance).` : `${u.san}: not the right idea (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
+        if (parsed.moves.length > 2) { const gl = await gradeLine(Cg, fen, parsed.moves, sol); if (gl.own > 1) allNotes.push(`Your follow-up holds up for ${gl.own} of your moves.`); }
+        if (moveScore < 0.4 && parsed.moves.length > 2) await runCalc(parsed.moves);
         return finish(moveScore >= 1 ? "Correct!" : moveScore > 0 ? "Partly right." : "Not the right move.");
       }
-      const gl = await gradeLine(C, sfen, parsed.moves, sol.slice(pre));
+      const gl = await gradeLine(Cg, sfen, parsed.moves, sol.slice(pre));
       allNotes.push(...gl.notes.map((n) => (first ? "" : "(continued) ") + n));
       const gotOwn = gl.own;
       if (first) depthStart = gotOwn;
       depthTotal = Math.ceil(pre / 2) + gotOwn;
       if (depthTotal >= nMine || (gl.notes.some((n) => n.includes("mate")) && gotOwn > 0)) { depthTotal = Math.max(depthTotal, nMine); if (first) depthStart = nMine; return finish(first ? `Excellent! You saw the whole line (${nMine} moves) straight away.` : `Solved, after help: ${depthStart} from the start, ${nMine} in total.`); }
-      if (gotOwn === 0 && first) return finish("Your first move isn't right.");
+      if (gotOwn === 0 && first) { if (parsed.moves.length > 2) await runCalc(parsed.moves); return finish(calc && calc.accurate >= 2 ? "Your first move isn't right, but part of your calculation was." : "Your first move isn't right."); }
       if (!gl.onSol || gotOwn === 0) return finish(first ? `Partly: ${gotOwn} of ${nMine} moves sound.` : `With help you got to ${depthTotal} of ${nMine}.`);
       // continue from the position after the correct moves + the opponent's reply
       stage(pre + gotOwn * 2);
