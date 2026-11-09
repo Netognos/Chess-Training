@@ -6,7 +6,14 @@ const PH = { opening: "Openings", middlegame: "Middlegame", endgame: "Endgames" 
 export function diagnose(A, player = {}) {
   const strengths = [], weaknesses = [];
   const phases = Object.keys(A.phaseMoves || {}).filter((p) => A.phaseMoves[p] >= 20);
-  if (phases.length) {
+  const F = A.phases;
+  if (F && F.weakest && F.phase[F.weakest].avg < 0 && F.games >= 5) {
+    // the same verdict as the "Phases and transitions" card: where win chance is lost, with the error rate as extra evidence
+    const w = F.weakest, b = F.strongest;
+    weaknesses.push({ key: "phase-" + w, area: PH[w], title: `Weakest phase: ${w}`,
+      evidence: `You lose on average ${Math.abs(F.phase[w].avg)}% win chance in the ${w}${A.seriousPer100?.[w] != null ? `, with ${A.seriousPer100[w]} mistakes+blunders per 100 moves (accuracy ${A.phaseAcc[w]}%)` : ""}.` });
+    if (b && b !== w) strengths.push({ title: `Strongest phase: ${b}`, evidence: `${F.phase[b].avg >= 0 ? "+" : ""}${F.phase[b].avg}% win chance per game in the ${b}${A.phaseAcc?.[b] != null ? `, accuracy ${A.phaseAcc[b]}%` : ""}.` });
+  } else if (phases.length) {
     const byErr = [...phases].sort((a, b) => A.seriousPer100[b] - A.seriousPer100[a] || A.phaseAcc[a] - A.phaseAcc[b]);
     const worst = byErr[0], best = byErr[byErr.length - 1];
     if (A.seriousPer100[worst] > 0 && worst !== best)

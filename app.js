@@ -486,6 +486,7 @@ function report(v) {
     <li><b>Converted / saved</b>: games where your win chance went above 85% (or below 15%), and how they ended.</li>
     <li><b>Analysis depth</b>: ${A.depth ? `Stockfish 19 (lite) looked on average <b>${A.depth} half-moves</b> deep per position` : "unknown for older games"}${A.serverAnalysed ? `; ${A.serverAnalysed} games reused the Lichess server analysis` : ""}. Depth 14-16 reliably finds mistakes and blunders at club level, and depth 18+ is roughly what Lichess uses for a quick server analysis.</li>
   </ul></details></div>
+  ${phasesHtml(A.phases, Object.keys(p.games).length)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
      ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}</div>
@@ -536,6 +537,7 @@ function bindRepertoire(v, p) {
 }
 function claudeSummary(p, A, D) {
   return `I'm training my chess with my Chess Coach app. Here is my profile. Help me with a concrete plan and explanations.\n\nPlayer: ${p.name}${p.rating ? `, rating ~${p.rating}` : ""}${p.goal ? `, goal: ${p.goal}` : ""}, ${p.hours} h/week.\n` +
+    (A.phases ? `Phases (Lichess division, win-chance change per phase): opening ${A.phases.phase.opening.avg}%, middlegame ${A.phases.phase.middlegame.avg ?? "-"}%, endgame ${A.phases.phase.endgame.avg ?? "-"}%. After the opening: ${A.phases.flow.afterOpening}% win chance; entering the endgame: ${A.phases.flow.afterMiddlegame ?? "-"}%. Most lost in the ${A.phases.weakest}.\n` : "") +
     `Analysed games: ${A.games}, score ${A.scorePct}%.\nAccuracy per phase: ${Object.entries(A.phaseAcc).map(([k, x]) => `${k} ${x} (${A.seriousPer100[k]} errors/100 moves)`).join(", ")}.\n` +
     `Error types: ${Object.entries(A.tags).map(([k, n]) => `${k}: ${n}`).join("; ")}.\nWinning positions converted: ${A.conversion.won}/${A.conversion.chances}; lost positions saved: ${A.resilience.saved}/${A.resilience.lost}.\n` +
     `Openings: ${A.openings.slice(0, 6).map((o) => `${o.color === "w" ? "W" : "B"} ${o.name} (${o.games}x, ${o.scorePct}%, win chance after move 10 ${o.wpAfter10 ?? "?"}${o.wpAfter10 != null ? "%" : ""})`).join("; ")}.\n` +
@@ -803,6 +805,40 @@ function endgames(v, arg) {
   v.querySelectorAll("[data-eg]").forEach((a) => (a.onclick = (ev) => { ev.preventDefault(); start(list.find((x) => x.id === a.dataset.eg)); window.scrollTo(0, 0); }));
   const first = (arg && list.find((x) => x.id === arg.id)) || list.find((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }) || list[0];
   if (first) start(first); else panel.innerHTML = `<p class="muted">No positions to show.</p>`;
+}
+
+// ------------------------------------------------------------------ phases and transitions (report)
+const PH_NAME = { opening: "Opening", middlegame: "Middlegame", endgame: "Endgame" };
+const sgn = (x, d = 1) => (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(d);
+function phasesHtml(F, total) {
+  if (!F) return `<div class="card"><h2>Phases and transitions</h2><p class="muted">None of your games has the phase data yet. Re-analyse them (Games → tick "Re-analyse games already analysed") to see where you gain and lose.</p></div>`;
+  const P = F.phase, fl = F.flow;
+  const col = (k) => { const x = P[k]; if (!x.games) return `<div class="phase"><div class="pn">${PH_NAME[k]}</div><div class="muted small">not reached</div></div>`;
+    return `<div class="phase ${k === F.weakest ? "leak" : k === F.strongest ? "gainer" : ""}"><div class="pn">${PH_NAME[k]}</div><div class="pv">${sgn(x.avg)}<small>%</small></div><div class="small muted">average win-chance change · ${x.games} game${x.games === 1 ? "" : "s"}</div><div class="small">lost ≥ 10% in ${x.lost10}% · gained ≥ 10% in ${x.won10}%</div></div>`; };
+  const outRow = (label, o) => (o ? `<tr><td>${label}</td><td>${o.n}</td><td>${o.win}%</td><td>${o.draw}%</td><td>${o.loss}%</td><td><b>${o.score}%</b></td></tr>` : `<tr><td>${label}</td><td>0</td><td colspan="4" class="muted">no games</td></tr>`);
+  const L = { better: "Better (≥ +1)", equal: "Equal (−1 … +1)", worse: "Worse (≤ −1)" };
+  const tip = F.weakest === "opening" ? "Most is lost before the middlegame starts: look at your openings (Openings → My repertoire) and the first critical decisions."
+    : F.weakest === "middlegame" ? "Most is lost in the middlegame: calculation, plans and tactics. Puzzles from your games and the thinking test target exactly this."
+    : F.weakest === "endgame" ? "Most is lost in the endgame: technique and theory. Train the endgames for your level (Train → Endgames)." : "";
+  const tm = F.T.openToMid;
+  return `<div class="card"><h2>Phases and transitions</h2>
+    <p class="small muted" style="margin-top:-6px">${F.games} of ${total} game${total === 1 ? "" : "s"}. Phases are divided like Lichess does it. Each phase shows how much win chance you gain or lose in it, from the start (≈ 50%) to your actual result.</p>
+    ${total > F.games ? `<div class="feedback warn small">${total - F.games} older game${total - F.games === 1 ? " has" : "s have"} no phase data yet and ${total - F.games === 1 ? "is" : "are"} left out here (the accuracy per phase above still mixes in the old division for ${total - F.games === 1 ? "it" : "them"}). Re-analyse: Games → tick "Re-analyse games already analysed" → Load &amp; analyse.</div>` : ""}
+    <div class="phases">${["opening", "middlegame", "endgame"].map(col).join('<div class="arrow" aria-hidden="true">→</div>')}</div>
+    ${F.weakest ? (P[F.weakest].avg < 0 ? `<p><b>You leave the most in the ${F.weakest}</b> (${sgn(P[F.weakest].avg)}% per game)${F.strongest && F.strongest !== F.weakest ? `, and do best in the ${F.strongest} (${sgn(P[F.strongest].avg)}%)` : ""}. ${tip}</p>`
+      : `<p><b>You don't lose win chance in any phase on average.</b> Your smallest gain is in the ${F.weakest} (${sgn(P[F.weakest].avg)}% per game)${F.strongest && F.strongest !== F.weakest ? `, the biggest in the ${F.strongest} (${sgn(P[F.strongest].avg)}%)` : ""}.</p>`) : `<p class="small muted">At least 3 games per phase are needed before naming your weakest phase.</p>`}
+    <div class="stats" style="margin:10px 0">
+      ${fl.afterOpening !== null ? `<div class="stat"><div class="v">${fl.afterOpening}%</div><div class="l">win chance after the opening (${sgn(fl.cpAfterOpening, 2)}), middlegame from move ${fl.midMove}</div></div>` : `<div class="stat"><div class="v">–</div><div class="l">no game reached a middlegame</div></div>`}
+      ${fl.afterMiddlegame !== null ? `<div class="stat"><div class="v">${fl.afterMiddlegame}%</div><div class="l">win chance entering the endgame (${sgn(fl.cpAfterMiddlegame, 2)}), from move ${fl.endMove} · ${fl.reachedEnd}% of games</div></div>` : `<div class="stat"><div class="v">–</div><div class="l">no game reached an endgame</div></div>`}
+      <div class="stat"><div class="v">${fl.result}%</div><div class="l">final score</div></div></div>
+    <h3>After the opening → final result</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.opening[k])).join("")}</table></div>
+    <h3>After the opening → entering the endgame</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Still better</th><th>Equal</th><th>Worse</th></tr>${["better", "equal", "worse"].map((k) => tm[k] ? `<tr><td>${L[k]}</td><td>${tm[k].n}</td><td>${tm[k].better}%</td><td>${tm[k].equal}%</td><td>${tm[k].worse}%</td></tr>` : `<tr><td>${L[k]}</td><td>0</td><td colspan="3" class="muted">no games reached an endgame</td></tr>`).join("")}</table></div>
+    <h3>Entering the endgame → final result</h3><div class="scroll"><table><tr><th>Entering the endgame</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.middlegame[k])).join("")}</table></div>
+    <details class="small" style="margin-top:8px"><summary><b>How is this worked out?</b></summary><ul>
+      <li><b>Phases</b> follow the Lichess rules (its "Divider"): the middlegame starts at the first position with at most 10 pieces other than kings and pawns, or with fewer than 4 pieces left on a player's back rank, or where white and black pieces are clearly mixed. The endgame starts when at most 6 pieces other than kings and pawns are left. Chess.com doesn't publish its rules.</li>
+      <li><b>Win chance</b> uses the Lichess formula on the Stockfish evaluation, from your point of view. The phase change is the win chance at the end of the phase minus the one at its start; the end of the game counts as your result (100 win, 50 draw, 0 loss), so a loss on time or a resignation counts too.</li>
+      <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, at the moment the phase changes.</li>
+      <li>${total - F.games ? `${total - F.games} older game${total - F.games === 1 ? " has" : "s have"} no phase data yet: re-analyse to include ${total - F.games === 1 ? "it" : "them"}.` : "All analysed games are included."}</li></ul></details></div>`;
 }
 
 // ------------------------------------------------------------------ BOARD (analysis)

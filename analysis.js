@@ -18,6 +18,39 @@ function kingSquare(fen, color) { const c = new Chess(fen); for (const row of c.
 const sqDist = (a, b) => Math.max(Math.abs(a.charCodeAt(0) - b.charCodeAt(0)), Math.abs(+a[1] - +b[1]));
 function pieceList(fen) { return fen.split(" ")[0].replace(/[\d/]/g, ""); }
 export function nonPawnMaterial(fen) { let s = 0; for (const c of pieceList(fen)) { const p = c.toLowerCase(); if (p !== "p" && p !== "k") s += VAL[p]; } return s; }
+// Game phases as Lichess divides them (scalachess Divider.scala, MIT licence, © Thibault Duplessis):
+// middlegame = first position with ≤ 10 major/minor pieces, or a sparse back rank (< 4 pieces on a player's
+// first rank), or "mixedness" > 150; endgame = first position with ≤ 6 major/minor pieces.
+function board64(fen) { const b = []; const rows = fen.split(" ")[0].split("/"); for (let r = 0; r < 8; r++) { let f = 0; for (const ch of rows[r]) { if (/\d/.test(ch)) f += +ch; else { b[(7 - r) * 8 + f] = ch; f++; } } } return b; }
+function mixScore(y, w, bl) {
+  switch (w) {
+    case 0: return bl === 1 ? 1 + y : bl === 2 ? (y < 6 ? 2 + (6 - y) : 0) : bl === 3 || bl === 4 ? (y < 7 ? 3 + (7 - y) : 0) : 0;
+    case 1: return bl === 0 ? 1 + (8 - y) : bl === 1 ? 5 + Math.abs(4 - y) : bl === 2 ? 4 + (7 - y) : bl === 3 ? 5 + (7 - y) : 0;
+    case 2: return bl === 0 ? (y > 2 ? 2 + (y - 2) : 0) : bl === 1 ? 4 + (y - 1) : bl === 2 ? 7 : 0;
+    case 3: return bl === 0 ? (y > 1 ? 3 + (y - 1) : 0) : bl === 1 ? 5 + (y - 1) : 0;
+    case 4: return bl === 0 ? (y > 1 ? 3 + (y - 1) : 0) : 0;
+    default: return 0;
+  }
+}
+function mixedness(b) {
+  let acc = 0;
+  for (let y = 0; y <= 6; y++) for (let x = 0; x <= 6; x++) {
+    let w = 0, bl = 0;
+    for (const sq of [y * 8 + x, y * 8 + x + 1, (y + 1) * 8 + x, (y + 1) * 8 + x + 1]) { const p = b[sq]; if (!p) continue; if (p === p.toUpperCase()) w++; else bl++; }
+    acc += mixScore(y + 1, w, bl);
+  }
+  return acc;
+}
+const majorsMinors = (b) => b.filter((p) => p && !"kKpP".includes(p)).length;
+const backrankSparse = (b) => { let w = 0, bl = 0; for (let f = 0; f < 8; f++) { const p = b[f], q = b[56 + f]; if (p && p === p.toUpperCase()) w++; if (q && q !== q.toUpperCase()) bl++; } return w < 4 || bl < 4; };
+// fens = positions from the start (index i = before move i). Returns indices where middlegame / endgame start (or null).
+export function divide(fens) {
+  let mid = null, end = null;
+  for (let i = 0; i < fens.length; i++) { const b = board64(fens[i]); if (majorsMinors(b) <= 10 || backrankSparse(b) || mixedness(b) > 150) { mid = i; break; } }
+  if (mid !== null) for (let i = 0; i < fens.length; i++) if (majorsMinors(board64(fens[i])) <= 6) { end = i; break; }
+  if (mid !== null && end !== null && mid >= end) mid = null;
+  return { mid, end };
+}
 export function phaseOf(fen, ply) { if (nonPawnMaterial(fen) <= 26) return "endgame"; return ply < 20 ? "opening" : "middlegame"; }
 export function endgameType(fen) {
   const k = new Set();
@@ -152,14 +185,19 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   }
   const opp = color === "w" ? "b" : "w";
   const oppCastle = castle.w && castle.b && castle.w !== castle.b;
+  const div = divide(g.fens);
+  const phaseAt = (i) => (div.end !== null && i >= div.end ? "endgame" : div.mid !== null && i >= div.mid ? "middlegame" : "opening");
+  // win chance (player's view) at the phase borders; the end of the game counts as the result itself
+  const wpAt = (i) => +winPct(sign * evals[Math.min(i, evals.length - 1)].cp).toFixed(1);
+  const cpAt = (i) => Math.max(-1500, Math.min(1500, sign * evals[Math.min(i, evals.length - 1)].cp));
   for (let i = 0; i < g.moves.length; i++) {
     const fen = g.fens[i];
-    const ph = phaseOf(fen, i);
+    const ph = phaseAt(i);
     if (ph === "endgame" && !firstEnd) firstEnd = { ply: i, type: endgameType(fen) };
     if (g.moves[i].color !== color) continue;
     const cpB = sign * evals[i].cp, cpA = sign * evals[i + 1].cp;
     const wpB = winPct(cpB), wpA = winPct(cpA);
-    if (i >= 20) { maxWp = Math.max(maxWp, wpA); minWp = Math.min(minWp, wpA); if (wpAfterOpening === null) wpAfterOpening = wpB; }
+    if (i >= (div.mid ?? 20)) { maxWp = Math.max(maxWp, wpA); minWp = Math.min(minWp, wpA); if (wpAfterOpening === null) wpAfterOpening = wpB; }
     const macc = moveAccuracy(wpB, wpA);
     phaseAcc[ph].push(macc);
     { // style metrics
@@ -216,6 +254,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     site: H.Site || "", date: H.UTCDate || H.Date || "", white: H.White, black: H.Black, color, result: res, score,
     playerElo: color === "w" ? H.WhiteElo : H.BlackElo, opponentElo: color === "w" ? H.BlackElo : H.WhiteElo,
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
+    ph: score === undefined ? null : { mid: div.mid, end: div.end, mMid: div.mid !== null ? +g.fens[div.mid].split(" ")[5] : null, mEnd: div.end !== null ? +g.fens[div.end].split(" ")[5] : null, w0: wpAt(0), wMid: div.mid !== null ? wpAt(div.mid) : null, cMid: div.mid !== null ? cpAt(div.mid) : null, wEnd: div.end !== null ? wpAt(div.end) : null, cEnd: div.end !== null ? cpAt(div.end) : null, res: score * 100 },
     plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
@@ -235,6 +274,7 @@ export function aggregate(games) {
   for (const g of games) for (const [ph, a] of Object.entries(g.phaseAcc)) { const n = g.phaseMoves[ph]; tot[ph] = (tot[ph] || 0) + a * n; cnt[ph] = (cnt[ph] || 0) + n; }
   A.phaseAcc = Object.fromEntries(Object.keys(tot).map((p) => [p, +(tot[p] / cnt[p]).toFixed(1)]));
   A.phaseMoves = cnt;
+  A.phases = phaseFlow(games);
   const errs = games.flatMap((g) => g.errors.map((e) => ({ ...e, game: g.site, color: g.color, opening: g.opening })));
   A.errorCounts = {}; for (const e of errs) A.errorCounts[e.label] = (A.errorCounts[e.label] || 0) + 1;
   const serious = errs.filter((e) => e.label !== "inaccuracy");
@@ -276,4 +316,43 @@ export function aggregate(games) {
   // openings faced: per colour, worst results (min 2 games)
   A.hardest = A.openings.filter((o) => o.games >= 2).sort((a, b) => a.scorePct - b.scorePct || (a.wpAfter10 ?? 50) - (b.wpAfter10 ?? 50)).slice(0, 5);
   return A;
+}
+
+// ---------------------------------------------------------------- phases and transitions
+// Per phase: how much win chance you gain or lose in it (start ≈ 50%, end = your result 100/50/0).
+// Transitions: after the opening / after the middlegame you are better (≥ +1 pawn), equal, or worse (≤ −1): what follows?
+const bucket = (cp) => (cp >= 100 ? "better" : cp <= -100 ? "worse" : "equal");
+export function phaseFlow(games) {
+  const gs = games.filter((g) => g.ph && typeof g.ph.res === "number");
+  if (!gs.length) return null;
+  const avg = (xs) => (xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1) : null);
+  const gain = { opening: [], middlegame: [], endgame: [] };
+  for (const g of gs) {
+    const { w0, wMid, wEnd, res } = g.ph;
+    gain.opening.push((wMid ?? wEnd ?? res) - w0);
+    if (wMid !== null) gain.middlegame.push((wEnd ?? res) - wMid);
+    if (wEnd !== null) gain.endgame.push(res - wEnd);
+  }
+  const P = {};
+  for (const k of Object.keys(gain)) {
+    const xs = gain[k];
+    P[k] = { games: xs.length, avg: avg(xs), lost10: xs.length ? Math.round((100 * xs.filter((x) => x <= -10).length) / xs.length) : null, won10: xs.length ? Math.round((100 * xs.filter((x) => x >= 10).length) / xs.length) : null };
+  }
+  const withMid = gs.filter((g) => g.ph.wMid !== null), withEnd = gs.filter((g) => g.ph.wEnd !== null);
+  const flow = { afterOpening: avg(withMid.map((g) => g.ph.wMid)), cpAfterOpening: avg(withMid.map((g) => g.ph.cMid / 100)), afterMiddlegame: avg(withEnd.map((g) => g.ph.wEnd)), cpAfterMiddlegame: avg(withEnd.map((g) => g.ph.cEnd / 100)), result: avg(gs.map((g) => g.ph.res)),
+    midMove: withMid.length ? Math.round(avg(withMid.map((g) => g.ph.mMid ?? Math.floor(g.ph.mid / 2) + 1))) : null, endMove: withEnd.length ? Math.round(avg(withEnd.map((g) => g.ph.mEnd ?? Math.floor(g.ph.end / 2) + 1))) : null, reachedEnd: Math.round((100 * withEnd.length) / gs.length) };
+  // transitions
+  const outcome = (list) => { const n = list.length; if (!n) return null; const w = list.filter((g) => g.ph.res === 100).length, d = list.filter((g) => g.ph.res === 50).length; return { n, win: Math.round((100 * w) / n), draw: Math.round((100 * d) / n), loss: Math.round((100 * (n - w - d)) / n), score: Math.round(list.reduce((a, g) => a + g.ph.res, 0) / n) }; };
+  const T = { opening: {}, middlegame: {}, openToMid: {} };
+  for (const b of ["better", "equal", "worse"]) {
+    const o = withMid.filter((g) => bucket(g.ph.cMid) === b);
+    T.opening[b] = outcome(o);
+    const m = withEnd.filter((g) => bucket(g.ph.cEnd) === b);
+    T.middlegame[b] = outcome(m);
+    const oe = o.filter((g) => g.ph.wEnd !== null);
+    T.openToMid[b] = oe.length ? { n: oe.length, better: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "better").length) / oe.length), equal: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "equal").length) / oe.length), worse: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "worse").length) / oe.length) } : null;
+  }
+  // where do you leave the most?
+  const ranked = Object.entries(P).filter(([, v]) => v.games >= 3 && v.avg !== null).sort((x, y) => x[1].avg - y[1].avg);
+  return { games: gs.length, phase: P, flow, T, weakest: ranked[0]?.[0] || null, strongest: ranked[ranked.length - 1]?.[0] || null };
 }
