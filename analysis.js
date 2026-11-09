@@ -216,7 +216,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     site: H.Site || "", date: H.UTCDate || H.Date || "", white: H.White, black: H.Black, color, result: res, score,
     playerElo: color === "w" ? H.WhiteElo : H.BlackElo, opponentElo: color === "w" ? H.BlackElo : H.WhiteElo,
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
-    plies: g.moves.length, accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
+    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),

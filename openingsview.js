@@ -2,6 +2,7 @@
 import { Chess } from "./vendor/chess.js";
 import { PIECES } from "./pieces.js";
 import { OPENINGS, SIDE_LABEL } from "./openings.js";
+import { mountExplorer } from "./explorer.js";
 
 const IMG = Object.fromEntries(Object.entries(PIECES).map(([k, v]) => [k, "data:image/svg+xml;utf8," + encodeURIComponent(v)]));
 const TYPE_NAME = { activist: "Activist", reflector: "Reflector", pragmatist: "Pragmatist", theoretician: "Theoretician" };
@@ -81,7 +82,8 @@ function detail(v, o, C) {
   v.innerHTML = `<button class="back" id="back">‹ All openings</button>
     <div class="two"><div><div id="ob"></div>
         <div class="movestrip" id="ms"></div>
-        <div class="row"><button class="btn secondary small" id="first">⏮</button><button class="btn secondary small" id="prev">◀</button><button class="btn secondary small" id="next">▶</button><button class="btn secondary small" id="toBoard">Analyse this position</button></div></div>
+        <div class="row"><button class="btn secondary small" id="first">⏮</button><button class="btn secondary small" id="prev">◀</button><button class="btn secondary small" id="next">▶</button><button class="btn secondary small" id="toBoard">Analyse this position</button></div>
+        <div class="card" style="margin-top:14px"><h2>Opening book</h2><p class="small muted" style="margin-top:-6px">The moves played in this position. Click a move to follow it; moves outside the main line open on the Board.</p><div id="ex"></div></div></div>
       <div>
         <div class="row" style="justify-content:space-between;margin-bottom:6px"><span class="muted">${SIDE_LABEL[o.side]} · ${C.esc(o.eco)} · ${THEORY[o.theory]}</span>${meter(o.sharp)}</div>
         <div class="card"><h2>The idea</h2><p>${C.esc(o.idea)}</p><h3>Typical plans</h3><ul>${o.plans.map((x) => `<li>${C.esc(x)}</li>`).join("")}</ul></div>
@@ -95,8 +97,10 @@ function detail(v, o, C) {
       </div></div>`;
   const brd = new C.Board(v.querySelector("#ob"), { interactive: false }); brd.setOrientation(o.side === "w" ? "w" : "b");
   const toks = sanList(o.moves);
+  let ex = null;
   const draw = () => {
     brd.setFen(pos[i].fen, { last: pos[i].last });
+    if (ex) ex.refresh();
     v.querySelector("#ms").innerHTML = toks.map((s, k) => `${k % 2 === 0 ? `<span class="no">${k / 2 + 1}.</span>` : ""}<a href="#" data-k="${k + 1}" class="${k + 1 === i ? "on" : ""}">${C.esc(s)}</a>`).join("");
     v.querySelectorAll("#ms a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); i = +a.dataset.k; draw(); }));
   };
@@ -104,6 +108,13 @@ function detail(v, o, C) {
   v.querySelector("#prev").onclick = () => { i = Math.max(0, i - 1); draw(); };
   v.querySelector("#next").onclick = () => { i = Math.min(pos.length - 1, i + 1); draw(); };
   v.querySelector("#toBoard").onclick = () => C.go("board", { fen: pos[i].fen });
+  ex = mountExplorer(v.querySelector("#ex"), { getFen: () => pos[i].fen, p, esc: C.esc, go: C.go,
+    onMove: (uci) => {
+      const nx = pos[i + 1];
+      if (nx && nx.last && nx.last[0] + nx.last[1] === uci.slice(0, 4)) { i++; draw(); return; }
+      const c = new Chess(pos[i].fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      C.go("board", { fen: c.fen(), book: true });
+    } });
   v.querySelector("#back").onclick = () => C.go("openings");
   const ar = v.querySelector("#addRep");
   if (ar) ar.onclick = () => { p.repertoire ||= {}; p.repertoire.ids ||= {}; p.repertoire.ids[slot] = o.id; p.repertoire[slot] = o.name; C.save(); C.logEvent("repertoire", `${o.name} added to the repertoire`); C.toast("Added to your repertoire"); detail(v, o, C); };

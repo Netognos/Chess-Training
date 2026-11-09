@@ -6,6 +6,7 @@ import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
 import { probe, testingMove, gradeTB, moveScore } from "./tb.js";
+import { mountExplorer, lichessToken, setLichessToken } from "./explorer.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle } from "./test.js";
@@ -208,8 +209,12 @@ function account(v) {
   v.innerHTML = `<div class="card"><h2>${esc(p.name)}</h2><p class="small muted">The usernames let the app download your games. Rating is used when there are no games yet.</p>${profileForm(p)}
       <div class="row" style="margin-top:14px"><button class="btn" id="saveP">Save profile</button></div></div>
     <div class="card" id="aiCardA"></div>
+    <div class="card"><h2>Lichess token (opening book statistics)</h2><p class="small muted">The opening book works without it. With a free personal Lichess token it also shows how often each move is played and how it scores, in master games and in Lichess games of 1800+ players. Create one (no permissions needed) at <a href="https://lichess.org/account/oauth/token/create?description=Chess%20Coach%20explorer" target="_blank" rel="noopener">lichess.org → API access tokens</a> and paste it here. It stays in this browser only and is not included in backups.</p>
+      <div class="row"><input id="lit" class="grow" placeholder="${lichessToken() ? "•••••••• (saved)" : "lip_…"}" autocomplete="off"><button class="btn" id="litSave">Save</button>${lichessToken() ? '<button class="btn secondary" id="litDel">Remove</button>' : ""}</div><div id="litMsg" class="small" style="margin-top:6px"></div></div>
     <div class="card"><h2>Delete player</h2><p class="small muted">Removes ${esc(p.name)} and all games, puzzles, tests and notes from this browser. Make a backup first (Home → Log &amp; backup).</p><button class="btn danger" id="delP">Delete ${esc(p.name)}</button></div>`;
   aiSettings(v.querySelector("#aiCardA"));
+  $("#litSave").onclick = () => { const t = $("#lit").value.trim(); if (!t) { $("#litMsg").textContent = "Paste your Lichess token in the field first."; return; } setLichessToken(t); toast("Lichess token saved"); go("account"); };
+  if ($("#litDel")) $("#litDel").onclick = () => { setLichessToken(""); toast("Lichess token removed"); go("account"); };
   $("#saveP").onclick = () => { const d = readProfile(v); if (!d.name) return toast("Fill in a name"); Object.assign(p, d); save(); renderPicker(); v.querySelector("h2").textContent = p.name; toast("Profile saved"); };
   $("#delP").onclick = () => { if (confirm(`Delete ${p.name} and all their data?`)) {
       const q = loadQueue(); if (q?.player === p.id) { if (running) running.stop = true; saveQueue(null); $("#jobBar").classList.add("hidden"); }
@@ -808,8 +813,9 @@ function board(v, arg) {
 </div>
     <div><div class="card"><h2>Analysis</h2>
       <label class="f">FEN<input id="fen"></label><div class="row" style="margin-top:6px"><button class="btn secondary" id="load">Load FEN</button><button class="btn secondary" id="pgnLoad">Load PGN…</button></div>
-      <div class="row" style="margin-top:10px"><label class="row small"><input type="checkbox" id="auto" ${p.settings.autoEngine ? "checked" : ""}> Show engine</label><label class="row small"><input type="checkbox" id="vs"> Engine plays the other side</label></div>
+      <div class="row" style="margin-top:10px"><label class="row small"><input type="checkbox" id="auto" ${p.settings.autoEngine ? "checked" : ""}> Show engine</label><label class="row small"><input type="checkbox" id="vs"> Engine plays the other side</label><label class="row small"><input type="checkbox" id="bookT" ${p.settings.book || arg?.book ? "checked" : ""}> Opening book</label></div>
       <div class="lines" id="lines" style="margin-top:8px"></div><div class="small muted" id="moves" style="margin-top:8px"></div></div>
+      <div class="card ${p.settings.book || arg?.book ? "" : "hidden"}" id="bookCard"><h2>Opening book</h2><div id="ex"></div></div>
       <div class="card" id="sheet"></div>
       <div class="card"><h2>Read the position</h2><p class="small muted">Material, loose pieces, threats, kings, pawns and activity, plus what that means for the plan. Fill in the Think sheet first, then compare.</p>
       <button class="btn secondary" id="readBtn">Read the position</button><div id="readOut" style="margin-top:8px"></div>${evalGuideHtml()}</div>
@@ -824,9 +830,15 @@ function board(v, arg) {
   let readOpen = false;
   const drawRead = () => { if (readOpen) $("#readOut").innerHTML = readerHtml(brd.fen()); };
   $("#readBtn").onclick = () => { readOpen = !readOpen; $("#readBtn").textContent = readOpen ? "Hide reading" : "Read the position"; $("#readOut").innerHTML = readOpen ? readerHtml(brd.fen()) : ""; };
-  let token = 0;
+  let token = 0, ex = null;
+  const showBook = () => {
+    const on = $("#bookT").checked; $("#bookCard").classList.toggle("hidden", !on);
+    if (on && !ex) ex = mountExplorer($("#ex"), { getFen: () => brd.fen(), p, esc, go, onMove: (uci) => { const before = brd.fen(); const r = brd.play(uci); if (r) brd.onMove(r, before); } });
+    else if (on) ex.refresh();
+  };
   const refresh = async () => {
     $("#fen").value = brd.fen();
+    if (ex && $("#bookT").checked) ex.refresh();
     $("#moves").textContent = hist.length ? "Moves: " + hist.map((h) => h.san).join(" ") : "";
     const c = brd.chess;
     drawRead();
@@ -863,6 +875,8 @@ function board(v, arg) {
   $("#load").onclick = () => { try { const f = $("#fen").value.trim(); new Chess(f); hist.length = 0; brd.setFen(f); brd.setOrientation(f.split(" ")[1]); refresh(); } catch (e) { toast("Invalid FEN"); } };
   $("#pgnLoad").onclick = () => { const t = prompt("Paste a PGN (one game):"); if (!t) return; try { const g = parseGame(t); hist.length = 0; brd.setFen(g.fens[g.fens.length - 1]); g.moves.forEach((m, i) => hist.push({ san: m.san, before: g.fens[i] })); refresh(); } catch { toast("Couldn't read the PGN"); } };
   $("#auto").onchange = () => { p.settings.autoEngine = $("#auto").checked; save(); refresh(); };
+  $("#bookT").onchange = () => { p.settings.book = $("#bookT").checked; save(); showBook(); };
+  if ($("#bookT").checked) showBook();
   $("#addPz").onclick = async () => {
     const fen = brd.fen(); toast("Engine is looking for the best move…");
     const [l] = await getEngine().analyse(fen, { movetime: 1500 });

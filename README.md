@@ -3,7 +3,7 @@
 A personal chess trainer that runs entirely in your browser: on your laptop or your phone, with no server and no account. Stockfish 19 runs locally (WebAssembly).
 
 - **Games**: import your games from Lichess or Chess.com (by username) or from a PGN file, and analyse them with Stockfish. Correspondence games (Lichess correspondence, Chess.com daily, optional) are marked separately.
-- **Openings**: a library of 36 openings with the idea, typical plans, strong and weaker sides, how sharp they are and which player type they suit; pick your own repertoire.
+- **Openings**: a library of 36 openings with the idea, typical plans, strong and weaker sides, how sharp they are and which player type they suit; pick your own repertoire. **Opening book** for every position (on each opening page and on the Board): the named book moves (Lichess opening list, offline), master and Lichess 1800+ statistics (with a free Lichess token), and what you played yourself.
 - **Report**: accuracy per phase (opening, middlegame, endgame); mistakes per 100 moves; the type of each error (missed tactic, hung piece, time trouble, endgame technique, positional); openings with your score and win chance after move 10; endgames reached; converting winning positions and saving lost ones. From that, it lists your **strengths and weak points** and builds a **weekly training plan**, based on GM Kuljasevic's study split and shifted toward your weak areas.
 - **Puzzles**: your own biggest mistakes come back as puzzles, with spaced repetition (1, 3, 7, 21 and 60 days).
 - **Endgames**: the theory positions you need to know (basic mates, square rule, opposition, Lucena, Philidor, K+B+N), played out against the engine. You can add your own positions.

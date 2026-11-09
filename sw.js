@@ -1,14 +1,14 @@
 // Service worker: makes Chess Coach installable and usable offline.
 // Bump VERSION on every release so installed apps pick up the new files.
-const VERSION = "cc-v23";
+const VERSION = "cc-v24";
 const CORE = [
   "./", "index.html", "style.css", "manifest.webmanifest",
-  "app.js", "analysis.js", "board.js", "coach.js", "data.js", "engine.js", "pieces.js", "reader.js", "explain.js", "ai.js", "lines.js", "tb.js",
+  "app.js", "analysis.js", "board.js", "coach.js", "data.js", "engine.js", "pieces.js", "reader.js", "explain.js", "ai.js", "lines.js", "explorer.js", "tb.js",
   "openings.js", "openingsview.js", "style.js", "testextra.js", "test.js", "fonts/archivo.woff2", "vendor/chess.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-192.png", "icons/maskable-512.png", "icons/apple-touch-icon.png",
 ];
 // big files: fetched in the background after installing, so the first visit isn't slowed down
-const HEAVY = ["vendor/stockfish/stockfish-19-lite-single.js", "vendor/stockfish/stockfish-19-lite-single.wasm", "testbank.js", "extrabank.js"];
+const HEAVY = ["vendor/stockfish/stockfish-19-lite-single.js", "vendor/stockfish/stockfish-19-lite-single.wasm", "testbank.js", "extrabank.js", "book.js"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));

@@ -262,3 +262,14 @@ a { color: var(--link); }
   .subnav button.active { color: var(--ink); }
   .movestrip a { color: var(--ink); }
 }
+
+/* opening explorer */
+.extabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.extabs .chip { padding: 4px 11px; font-size: 13px; }
+.extable { font-size: 14px; }
+.extable tr[data-uci] { cursor: pointer; }
+.extable tr[data-uci]:hover td { background: var(--soft); }
+.exname { margin: 0 0 8px; }
+.wdl { display: flex; height: 18px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line); font-size: 11px; line-height: 18px; font-weight: 600; }
+.wdl i { font-style: normal; text-align: center; white-space: nowrap; overflow: hidden; }
+.wdl .w { background: #f4f4f0; color: #222; } .wdl .d { background: #a9b0ac; color: #111; } .wdl .b { background: #2b2f2d; color: #eee; }
