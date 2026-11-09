@@ -5,6 +5,7 @@ import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey } from ".
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
+import { probe, testingMove, gradeTB, moveScore } from "./tb.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle } from "./test.js";
@@ -179,7 +180,7 @@ function home(v) {
     return;
   }
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
-  const dueEg = allEndgames(p).filter((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }).length;
+  const dueEg = endgamesFor(p).filter((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }).length;
   const last = p.reports[0];
   const nG = Object.keys(p.games).length;
   const tests = (p.tests || []).filter((t) => t.done);
@@ -675,51 +676,64 @@ async function gradeMove(fen, uci, movetime = 900) {
 }
 
 // ------------------------------------------------------------------ ENDGAMES
-const allEndgames = (p) => ENDGAMES.concat(p.customEndgames || []);
+const allEndgames = (p) => ENDGAMES.concat((p.customEndgames || []).map((c) => ({ r: 0, opp: "", hint: "", ...c })));
+// the endgames that fit the player: from about 400 below their rating (own positions always), unless "show easier" is on
+const endgamesFor = (p) => { const elo = playerElo(p); return allEndgames(p).filter((e) => p.settings.egEasy || !e.r || e.r >= elo - 400 || e.level === "Own position").sort((a, b) => (a.r || 9999) - (b.r || 9999)); };
 function endgames(v, arg) {
   const p = P();
-  const list = allEndgames(p);
-  v.innerHTML = `<div class="two"><div><div id="eb"></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="reset">Restart</button><button class="btn secondary" id="idea">Show idea</button><button class="btn secondary" id="toBoard">Open on Board</button></div></div>
-    <div><div class="card" id="epanel"></div><div class="card"><h2>Positions to know</h2><div class="scroll"><table><tr><th>Position</th><th>Level</th><th>Status</th></tr>
-    ${list.map((e) => { const s = p.endgames[e.id]; const st = !s ? "new" : (s.box || 0) >= 4 ? "known" : "learning"; const due = !s || s.due <= today();
-      return `<tr><td><a href="#" data-eg="${e.id}">${esc(e.theme)}</a></td><td class="small">${esc(e.level)}</td><td><span class="pill ${st === "known" ? "good" : st === "learning" ? "inaccuracy" : ""}">${st}</span>${due && s ? ' <span class="pill mistake">review</span>' : ""}</td></tr>`; }).join("")}</table></div>
-    <p class="small muted">Add your own positions from the Board tab ("Add as endgame drill").</p></div></div></div>`;
+  const list = endgamesFor(p);
+  const hidden = allEndgames(p).length - list.length;
+  v.innerHTML = `<div class="two"><div><div id="eb"></div>
+      <div class="row" style="margin-top:8px"><button class="btn secondary" id="reset">Restart</button><button class="btn secondary" id="hint">Hint</button><button class="btn" id="nextEg">Next endgame</button><button class="btn secondary" id="toBoard">Open on Board</button></div></div>
+    <div><div class="card" id="epanel"></div>
+      <div class="card"><h2>Positions for your level</h2><p class="small muted">Chosen for a rating of about ${playerElo(p)}.${hidden ? ` ${hidden} easier position${hidden > 1 ? "s are" : " is"} hidden.` : ""} <label class="row small" style="display:inline-flex;margin-left:6px"><input type="checkbox" id="egEasy" ${p.settings.egEasy ? "checked" : ""}> show easier positions</label></p>
+      <div class="scroll"><table><tr><th>Position</th><th>Level</th><th>Status</th></tr>
+      ${list.map((e) => { const s = p.endgames[e.id]; const st = !s ? "new" : (s.box || 0) >= 4 ? "known" : "learning"; const due = !s || s.due <= today();
+        return `<tr><td><a href="#" data-eg="${e.id}">${esc(e.theme)}</a><div class="small muted">${esc(e.level || "")}</div></td><td class="small">${e.r ? "≈" + e.r : "own"}</td><td><span class="pill ${st === "known" ? "good" : st === "learning" ? "inaccuracy" : ""}">${st}</span>${due && s ? ' <span class="pill mistake">review</span>' : ""}</td></tr>`; }).join("")}</table></div>
+      <p class="small muted">Positions with up to 7 pieces are played with the Lichess tablebases: perfect play, and the computer picks the move that is hardest for you. Add your own positions from the Board ("Add as endgame drill").</p></div></div></div>`;
+  $("#egEasy").onchange = (e) => { p.settings.egEasy = e.target.checked; save(); go("endgames", { id: cur?.id }); };
   const brd = new Board($("#eb"));
-  let cur = null, moves = 0, over = false, attempt = 0;
+  let cur = null, moves = 0, over = false, attempt = 0, hints = 0;
   const panel = $("#epanel");
   const start = async (e) => {
     attempt++; getEngine().cancel(); // a Restart drops whatever the engine was still doing for the old attempt
-    cur = e; moves = 0; over = false;
-    brd.setFen(e.fen); brd.setOrientation(e.side); brd.locked = true;
+    cur = e; moves = 0; over = false; hints = 0;
+    brd.setFen(e.fen); brd.setOrientation(e.side); brd.locked = true; brd.setArrows([]);
     const goalTxt = e.goal === "win" ? `Win with ${e.side === "w" ? "White" : "Black"}${e.limit ? ` within ${e.limit} moves` : ""}` : `Hold the draw with ${e.side === "w" ? "White" : "Black"}`;
-    panel.innerHTML = `<h2>${esc(e.theme)}</h2><div class="small muted">${esc(e.level)}</div><p><b>Task:</b> ${goalTxt}. The engine defends as well as it can.</p>
+    panel.innerHTML = `<h2>${esc(e.theme)}</h2><div class="small muted">${esc(e.level || "")}${e.r ? ` · ≈${e.r}` : ""}</div>
+      <p><b>Task:</b> ${goalTxt}.</p>${e.opp ? `<p class="small"><b>What the computer tries:</b> ${esc(e.opp)}</p>` : ""}
       ${e.question ? `<div id="q"><p><b>First, a question:</b> ${esc(e.question.prompt)}</p><div class="row">${e.question.options.map((o) => `<button class="btn secondary" data-a="${esc(o)}">${esc(o)}</button>`).join("")}</div></div>` : ""}
-      <div id="efb"></div><div id="ideaBox" class="hidden feedback info small">${esc(e.idea)}</div>`;
+      <div id="efb"></div><div id="hintBox"></div><div id="src" class="small muted"></div>`;
     panel.querySelectorAll("[data-a]").forEach((b) => (b.onclick = () => {
       const ok = b.dataset.a === e.question.answer;
       $("#q").innerHTML = `<div class="feedback ${ok ? "ok" : "no"}">${ok ? "Correct" : "Not quite"}: ${esc(e.question.answer)}. ${esc(e.idea)}</div>`;
       begin();
     }));
+    probe(e.fen).then((t) => { if (cur === e) $("#src").textContent = t ? "Perfect play: Lichess tablebase." : "Played by Stockfish (more than 7 pieces, or the tablebase can't be reached)."; });
     if (!e.question) begin();
   };
   const begin = async () => {
     const my = attempt;
-    if (brd.chess.turn() !== cur.side) { brd.locked = true; $("#efb").innerHTML = `<div class="feedback info">The engine moves first…</div>`; await engineReply(); if (my !== attempt) return; }
+    if (brd.chess.turn() !== cur.side) { brd.locked = true; $("#efb").innerHTML = `<div class="feedback info">The computer moves first…</div>`; await engineReply(); if (my !== attempt) return; }
     if (!over) $("#efb").innerHTML = `<div class="feedback info">Your move.</div>`;
     brd.locked = over;
   };
+  // the computer's move: tablebase (most testing move) when possible, otherwise Stockfish
   const engineReply = async () => {
-    const my = attempt;
-    const [l] = await getEngine().analyse(brd.fen(), { movetime: 600 });
-    if (my !== attempt) return;
-    if (l && l.pv[0]) brd.play(l.pv[0]);
+    const my = attempt; const fen = brd.fen();
+    const t = await testingMove(fen);
+    if (my !== attempt || brd.fen() !== fen) return;
+    if (t) brd.play(t.move.uci);
+    else { const [l] = await getEngine().analyse(fen, { movetime: 700 }); if (my !== attempt || brd.fen() !== fen) return; if (l && l.pv[0]) brd.play(l.pv[0]); }
     checkEnd();
   };
   const finish = (ok, msg) => {
     over = true; brd.locked = true;
-    const s = (p.endgames[cur.id] ||= {}); srs(s, ok); save();
-    logEvent("endgame", `${cur.theme}: ${ok ? "succeeded" : "failed"} (${moves} move${moves === 1 ? "" : "s"})`);
-    $("#efb").innerHTML = `<div class="feedback ${ok ? "ok" : "no"}"><b>${ok ? "Well done!" : "Not this time."}</b> ${esc(msg)}${ok ? "" : "<br>" + esc(cur.idea)}</div>`;
+    const clean = ok && hints < 2;
+    const s = (p.endgames[cur.id] ||= {}); srs(s, clean); save();
+    logEvent("endgame", `${cur.theme}: ${ok ? "succeeded" : "failed"}${ok && hints ? ` (with ${hints} hint${hints > 1 ? "s" : ""})` : ""} (${moves} move${moves === 1 ? "" : "s"})`);
+    $("#efb").innerHTML = `<div class="feedback ${ok ? "ok" : "no"}"><b>${ok ? "Well done!" : "Not this time."}</b> ${esc(msg)}${ok && hints >= 2 ? " (You used hints, so it comes back sooner.)" : ""}${ok ? "" : "<br>" + esc(cur.idea)}</div>`;
+    $("#hintBox").innerHTML = "";
   };
   const checkEnd = () => {
     const c = brd.chess;
@@ -727,34 +741,63 @@ function endgames(v, arg) {
     if (c.isDraw()) { finish(cur.goal === "draw", cur.goal === "draw" ? "Draw: held." : "It's a draw, but the position was winning."); return true; }
     return false;
   };
+  // hint 1: the idea · hint 2: which piece · hint 3: the move itself
+  $("#hint").onclick = async () => {
+    if (!cur || over) return;
+    hints++;
+    const box = $("#hintBox");
+    if (hints === 1) { box.innerHTML = `<div class="feedback info small"><b>Idea:</b> ${esc(cur.idea)}${cur.hint ? `<br><b>Hint:</b> ${esc(cur.hint)}` : ""}</div>`; return; }
+    if (brd.chess.turn() !== cur.side) return;
+    box.innerHTML = `<div class="feedback info small">Looking…</div>`;
+    const fen = brd.fen(); const t = await probe(fen);
+    let uci = null;
+    if (t?.moves?.length) { const best = Math.max(...t.moves.map(moveScore)); uci = t.moves.find((m) => moveScore(m) === best).uci; }
+    else { const [l] = await getEngine().analyse(fen, { movetime: 800 }); uci = l?.pv[0] || null; }
+    if (!uci || brd.fen() !== fen) { box.innerHTML = ""; return; }
+    const pc = brd.chess.get(uci.slice(0, 2)); const names = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+    if (hints === 2) box.innerHTML = `<div class="feedback info small"><b>Hint 2:</b> move your <b>${names[pc?.type] || "piece"}</b> (on ${uci.slice(0, 2)}).</div>`;
+    else { box.innerHTML = `<div class="feedback info small"><b>Hint 3:</b> the arrow shows a move that keeps the ${cur.goal === "win" ? "win" : "draw"}.</div>`; brd.setArrows([{ from: uci.slice(0, 2), to: uci.slice(2, 4) }]); }
+  };
   brd.onMove = async (mv, before) => {
     if (!cur || over) return;
     const my = attempt;
-    brd.locked = true; moves++;
+    brd.locked = true; moves++; brd.setArrows([]);
     if (checkEnd()) return;
-    const ownWinCheck = cur.grade === "engine";
-    let g = null;
-    if (ownWinCheck) {
-      $("#efb").innerHTML = `<div class="feedback info">…</div>`;
-      g = await gradeMove(before, mv.lan || mv.from + mv.to + (mv.promotion || ""), 500);
-      if (my !== attempt) return; // restarted meanwhile
+    const uci = mv.from + mv.to + (mv.promotion || "");
+    $("#efb").innerHTML = `<div class="feedback info">…</div>`;
+    const tg = await gradeTB(before, uci);
+    if (my !== attempt) return;
+    let note = "";
+    if (tg) {
+      if (!tg.ok) { finish(false, `${mv.san} throws away the ${tg.before} (after it the position is a ${tg.after === "loss" ? "loss" : tg.after} for you). Moves that kept it: ${tg.good.slice(0, 5).join(", ")}.`); brd.setArrows([{ from: tg.bestUci.slice(0, 2), to: tg.bestUci.slice(2, 4) }]); return; }
+      note = "✓ keeps the " + tg.before;
+      const pieceCount = brd.fen().split(" ")[0].replace(/[^a-zA-Z]/g, "").length;
+      // won and simplified to a basic mate (K+Q/K+R vs K) for a player above that level: done
+      if (cur.goal === "win" && tg.before === "win" && pieceCount <= 3 && (cur.r || 0) >= 1200 && !brd.chess.isCheckmate()) { finish(true, "You reached a basic won ending (king and major piece against the king)."); return; }
+      if (cur.goal === "win" && mv.promotion && pieceCount <= 4) { finish(true, "Promoted, and the tablebase says it's winning."); return; }
+    } else if (cur.grade !== "theory") {
+      const g = await gradeMove(before, uci, 500);
+      if (my !== attempt) return;
       const yourCp = g.afterCp;
       if (cur.goal === "win" && g.bestCp > 300 && yourCp < 150) { finish(false, `${mv.san} lets the win slip (${g.verdict}). Best was ${g.bestLine.split(" ")[0]}.`); brd.setArrows([{ from: g.bestUci.slice(0, 2), to: g.bestUci.slice(2, 4) }]); return; }
       if (cur.goal === "draw" && yourCp < -300 && g.bestCp > -150) { finish(false, `${mv.san} loses (${g.verdict}). Best was ${g.bestLine.split(" ")[0]}.`); return; }
       if (cur.goal === "win" && mv.promotion && yourCp > 500) { finish(true, `Promoted, and the position is winning (${(yourCp / 100).toFixed(1)}).`); return; }
-      if (cur.goal === "draw" && moves >= 20) { finish(true, "20 moves held. The draw is safe."); return; }
+      note = g.verdict === "best" || g.verdict === "good" ? "✓ good move" : g.verdict;
     }
+    if (cur.goal === "draw" && moves >= 20) { finish(true, "20 moves held. The draw is safe."); return; }
+    if (cur.goal === "win" && !cur.limit && moves >= 60) { finish(false, "60 moves and still no win: the position stays winning, but look for the faster plan (see the idea)."); return; }
     if (cur.limit && moves >= cur.limit) { finish(false, `${cur.limit} moves without mate.`); return; }
+    $("#efb").innerHTML = `<div class="feedback info">Move ${moves}${note ? ` · ${esc(note)}` : ""}. The computer is thinking…</div>`;
     await engineReply();
     if (my !== attempt) return;
-    if (!over) { brd.locked = false; $("#efb").innerHTML = `<div class="feedback info">Move ${moves}${g ? ` · ${g.verdict === "best" || g.verdict === "good" ? "✓ good move" : g.verdict}` : ""}. Your move.</div>`; }
+    if (!over) { brd.locked = false; $("#efb").innerHTML = `<div class="feedback info">Move ${moves}${note ? ` · ${esc(note)}` : ""}. Your move.</div>`; }
   };
   $("#reset").onclick = () => cur && start(cur);
-  $("#idea").onclick = () => $("#ideaBox")?.classList.remove("hidden");
+  $("#nextEg").onclick = () => { const i = list.indexOf(cur); const nxt = list.slice(i + 1).find((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }) || list[(i + 1) % list.length]; start(nxt); window.scrollTo(0, 0); };
   $("#toBoard").onclick = () => go("board", { fen: brd.fen() });
   v.querySelectorAll("[data-eg]").forEach((a) => (a.onclick = (ev) => { ev.preventDefault(); start(list.find((x) => x.id === a.dataset.eg)); window.scrollTo(0, 0); }));
   const first = (arg && list.find((x) => x.id === arg.id)) || list.find((e) => { const s = p.endgames[e.id]; return !s || s.due <= today(); }) || list[0];
-  start(first);
+  if (first) start(first); else panel.innerHTML = `<p class="muted">No positions to show.</p>`;
 }
 
 // ------------------------------------------------------------------ BOARD (analysis)
