@@ -273,9 +273,10 @@ function games(v) {
       <div class="row" style="gap:6px;margin-top:4px;flex-wrap:wrap">${TC_CATS.map((c) => `<label class="chip"><input type="checkbox" data-tc="${c}" ${IO.cats.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div>
       <label class="f" style="margin-top:6px">Or only these exact time controls (optional)<input id="tcExact" value="${esc(IO.exact || "")}" placeholder="e.g. 3+0, 3+2, 10+5 (minutes + increment)"></label>
       <div class="small muted" id="tcHint"></div></div>
-    <label class="row small" style="margin-top:6px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for centipawn loss against your opponents on games analysed before v26)</label>
+    <label class="small" style="margin-top:6px;display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="reanalyse" style="margin-top:2px;flex:0 0 auto"><span>Re-analyse games that are already loaded (needed for centipawn loss against your opponents on games analysed before v26)</span></label>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
-    <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
+    <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div>
+      <div class="row hidden" id="progBtns" style="gap:8px;margin-top:8px"><button class="btn secondary small" id="progPause">Pause</button><button class="btn secondary small" id="progCancel">Cancel analysis</button></div></div>
     <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
     <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: how many half-moves Stockfish looks ahead in every position. It reaches that depth on any device; a phone simply takes longer. Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal (16) is plenty for club games; each step of 2 deeper takes about 2-3× as long. The first moves of a game (theory) and positions that are already won or lost are searched 6 half-moves less deep. Leave "Max. number of games" empty to load every game in the period.</p></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Depth</th><th>Opening</th></tr>
@@ -292,7 +293,7 @@ function games(v) {
     h.textContent = f.specific === null ? "Couldn't read that list. Write it like 3+0, 5+3, 15+10." : f.specific.length ? `Only ${f.specific.map(([b, i]) => fmtTc(b + "+" + i)).join(", ")} (the boxes above are ignored).` : f.cats.length ? `Loading ${f.cats.map((c) => TC_LABEL[c].toLowerCase()).join(", ")} games.` : "Tick at least one time control.";
     v.querySelectorAll("[data-tc]").forEach((x) => (x.closest(".chip").style.opacity = f.specific && f.specific.length ? ".45" : "")); };
   v.querySelectorAll("[data-tc]").forEach((x) => (x.onchange = hint)); $("#tcExact", v).oninput = hint; hint();
-  $("#go").onclick = () => runImport(v);
+  $("#go").onclick = () => runImport(v); if (running) syncProgBtns();
   const pq = loadQueue();
   if (running) { $("#prog").classList.remove("hidden"); }
   else if (pq && pq.items?.length) { $("#prog").classList.remove("hidden"); $("#progText").innerHTML = `Paused analysis: ${pq.items.length} game${pq.items.length === 1 ? "" : "s"} left. <a href="#" id="resumeQ">Continue</a> · <a href="#" id="dropQ">Cancel</a>`;
@@ -369,6 +370,15 @@ function jobUI(text, pct) {
   const b = $("#jobBar"); b.classList.remove("hidden");
   $("#jobText").textContent = text; if (pct !== undefined) $("#jobFill").style.width = pct.toFixed(1) + "%";
   const t = $("#progText"); if (t) { $("#prog").classList.remove("hidden"); t.textContent = text; if (pct !== undefined) $("#progBar").style.width = pct.toFixed(1) + "%"; }
+  syncProgBtns();
+}
+// the Games page has its own Pause / Cancel next to the progress bar (same actions as the bar at the top)
+function syncProgBtns() {
+  const w = $("#progBtns"); if (!w) return;
+  const on = !$("#jobCancel").classList.contains("hidden");
+  w.classList.toggle("hidden", !on);
+  $("#progPause").textContent = $("#jobStop").textContent; $("#progPause").classList.toggle("hidden", $("#jobStop").classList.contains("hidden"));
+  $("#progPause").onclick = () => $("#jobStop").click(); $("#progCancel").onclick = () => $("#jobCancel").click();
 }
 // q given = paused job: keep the bar with a Resume button
 function jobDone(text, q = null) {
@@ -376,6 +386,7 @@ function jobDone(text, q = null) {
   $("#jobText").textContent = text;
   const b = $("#jobStop"); b.textContent = "Resume"; b.classList.toggle("hidden", !q); $("#jobCancel").classList.toggle("hidden", !q);
   const t = $("#progText"); if (t) t.textContent = text;
+  syncProgBtns();
   if (!q) setTimeout(() => { if (!running) $("#jobBar").classList.add("hidden"); }, 6000);
 }
 
