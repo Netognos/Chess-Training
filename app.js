@@ -245,7 +245,9 @@ let running = null;
 const IOKEY = "chesscoach.importOpts";
 // time per position → typical depth reached by Stockfish 19 lite on a laptop, and the rough playing strength of
 // Stockfish at that depth (published depth-vs-Elo tests; a phone reaches 1-2 plies less)
-const SPEEDS = [[50, "Quick · d11-13 · ≈2350 Elo"], [80, "Fast · d12-14 · ≈2450 Elo"], [150, "Normal · d14-16 · ≈2600 Elo"], [400, "Deep · d17-19 · ≈2750 Elo"], [1000, "Very deep · d20-22 · ≈2900 Elo"]];
+// target depth → rough playing strength of Stockfish at that depth (published depth-vs-Elo tests). The depth is
+// reached on every device; a phone just needs more time for it.
+const SPEEDS = [[12, "Quick · depth 12 · ≈2400 Elo"], [14, "Fast · depth 14 · ≈2500 Elo"], [16, "Normal · depth 16 · ≈2650 Elo"], [18, "Deep · depth 18 · ≈2750 Elo"], [20, "Very deep · depth 20 · ≈2900 Elo"], [22, "Maximum · depth 22 · ≈3000 Elo"]];
 const TC_LABEL = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", correspondence: "Correspondence" };
 function importOpts() { try { const o = JSON.parse(localStorage.getItem(IOKEY)); if (o && Array.isArray(o.cats)) return o; } catch {} return { cats: ["rapid", "classical"], exact: "" }; }
 function readTcFilter(v) {
@@ -262,8 +264,8 @@ function games(v) {
     <div class="form">
       <label class="f">Sources<span class="row" style="gap:12px;color:var(--ink)"><label class="row small"><input type="checkbox" id="srcL" ${p.lichess ? "checked" : "disabled"}> Lichess${p.lichess ? ` (${esc(p.lichess)})` : ""}</label><label class="row small"><input type="checkbox" id="srcC" ${p.chesscom ? "checked" : "disabled"}> Chess.com${p.chesscom ? ` (${esc(p.chesscom)})` : ""}</label><label class="row small"><input type="checkbox" id="srcP" ${!p.lichess && !p.chesscom ? "checked" : ""}> PGN</label></span></label>
       <label class="f">Period<select id="months"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></label>
-      <label class="f">Max. number of games<input id="num" type="number" value="100" min="1" max="500"></label>
-      <label class="f">Analysis depth<select id="speed">${SPEEDS.map(([ms, l]) => `<option value="${ms}" ${ms === (IO.speed || 150) ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label class="f">Max. number of games<input id="num" type="number" value="${IO.num || ""}" min="1" placeholder="All games in the period"></label>
+      <label class="f">Analysis depth<select id="speed">${SPEEDS.map(([d, l]) => `<option value="${d}" ${d === (IO.depth || 16) ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     </div>
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
@@ -275,7 +277,7 @@ function games(v) {
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
     <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
-    <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: d = how many half-moves Stockfish looks ahead per position on a laptop (a phone reaches 1-2 less); Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal is plenty for club games; Very deep takes about 6× as long.</p></div>
+    <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: how many half-moves Stockfish looks ahead in every position. It reaches that depth on any device; a phone simply takes longer. Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal (16) is plenty for club games; each step of 2 deeper takes about 2-3× as long. The first moves of a game (theory) and positions that are already won or lost are searched 6 half-moves less deep. Leave "Max. number of games" empty to load every game in the period.</p></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Depth</th><th>Opening</th></tr>
     ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
       const e = (l) => g.errors.filter((x) => x.label === l).length;
@@ -309,7 +311,7 @@ async function fetchGames(p, opts, status) {
     status("Fetching games from Lichess…");
     const cats = opts.tf.specific.length ? lichessCatsFor(opts.tf.specific) : opts.tf.cats;
     const perf = [...new Set(cats.flatMap((c) => c === "bullet" ? ["ultraBullet", "bullet"] : [c]))].join(",");
-    const q = new URLSearchParams({ max: opts.num * (opts.tf.specific.length ? 4 : 2), since: Math.floor(since), clocks: "true", evals: "true", opening: "true", perfType: perf });
+    const q = new URLSearchParams({ ...(isFinite(opts.num) ? { max: opts.num * (opts.tf.specific.length ? 4 : 2) } : {}), since: Math.floor(since), clocks: "true", evals: "true", opening: "true", perfType: perf });
     const r = await fetch(`https://lichess.org/api/games/user/${encodeURIComponent(p.lichess)}?${q}`, { headers: { Accept: "application/x-chess-pgn" } });
     if (!r.ok) throw new Error(`Lichess answered ${r.status}. Is the username correct?`);
     for (const pgn of splitPgn(await r.text())) {
@@ -383,9 +385,9 @@ async function runImport(v) {
   const tf = readTcFilter(v);
   if (tf.specific === null) return toast("Couldn't read the exact time controls. Write them like 3+0, 5+3.");
   if (!tf.specific.length && !tf.cats.length) return toast("Tick at least one time control.");
-  try { localStorage.setItem(IOKEY, JSON.stringify({ cats: tf.cats, exact: tf.exact, speed: +$("#speed").value })); } catch {}
-  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, tf, num: +$("#num").value || 100 };
-  const movetime = +$("#speed").value;
+  try { localStorage.setItem(IOKEY, JSON.stringify({ cats: tf.cats, exact: tf.exact, depth: +$("#speed").value, num: +$("#num").value > 0 ? +$("#num").value : null })); } catch {}
+  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, tf, num: +$("#num").value > 0 ? +$("#num").value : Infinity };
+  const depth = +$("#speed").value;
   const re = $("#reanalyse").checked;
   const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.pgn && "PGN"].filter(Boolean).join(" + ");
   $("#prog").classList.remove("hidden"); $("#go").disabled = true;
@@ -395,9 +397,9 @@ async function runImport(v) {
     if (!list.length) throw new Error("No games found for this period and these time controls.");
     const items = list.filter((x) => re || !p.games[gameKey(x.pgn)]);
     if (!items.length) { $("#progText").textContent = `${list.length} games found, all already analysed.`; return; }
-    const q = { player: p.id, items, total: items.length, done: 0, added: 0, skipped: 0, movetime, src, started: new Date().toISOString() };
+    const q = { player: p.id, items, total: items.length, done: 0, added: 0, skipped: 0, depth, src, started: new Date().toISOString() };
     if (!saveQueue(q)) toast("Couldn't save the queue (storage full): this analysis can't resume if the app gets closed.");
-    $("#progText").textContent = `${list.length} games found, ${items.length} to analyse with ${engineCount()} engines in parallel. Estimated time: ~${Math.max(1, Math.round(items.length * movetime / 150 * 9 / 60 / engineCount()))} min.`;
+    $("#progText").textContent = `${list.length} games found, ${items.length} to analyse with ${engineCount()} engines in parallel. Estimated time: ~${Math.max(1, Math.round((items.length * 70 * 0.2 * Math.pow(2, (depth - 16) / 1.5)) / 60 / engineCount()))} min on a laptop, 2-3× longer on a phone (the bar shows the real time left once the first games are done).`;
     processQueue(q);
   } catch (e) {
     console.warn(e);
@@ -435,7 +437,7 @@ async function processQueue(q) {
     const doneNow = q.done - doneAtStart, el = (Date.now() - t0) / 1000;
     const eta = doneNow ? Math.round(el / doneNow * q.items.length / 60) : null;
     const dep = depths.length ? Math.round(depths.reduce((a, b) => a + b, 0) / depths.length) : null;
-    jobUI(`Analysing ${p.name}: ${q.done} of ${q.total} games done · ${n} engine${n > 1 ? "s" : ""}${dep ? ` · depth ≈${dep}` : ""}${eta !== null ? (eta < 1 ? " · less than a minute left" : ` · ~${eta} min left`) : ""}${wakeLock ? " · screen stays on" : ""}`, 100 * (q.done + partial) / q.total);
+    jobUI(`Analysing ${p.name}: ${q.done} of ${q.total} games done · ${n} engine${n > 1 ? "s" : ""}${dep ? ` · depth ${q.depth && dep < q.depth - 1 ? `≈${dep} (target ${q.depth}: some positions hit the 15 s limit)` : `≈${dep}`}` : ""}${eta !== null ? (eta < 1 ? " · less than a minute left" : ` · ~${eta} min left`) : ""}${wakeLock ? " · screen stays on" : ""}`, 100 * (q.done + partial) / q.total);
   };
   const inflight = new Set();
   const worker = async (eng, wi) => {
@@ -444,7 +446,7 @@ async function processQueue(q) {
       const it = q.items.find((x) => !inflight.has(x)); if (!it) break;
       inflight.add(it);
       let r;
-      try { r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime, cache: evalCache, book }, (k, m) => { progress[wi] = k / m; show(); }); }
+      try { r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime, depth: q.depth || null, cache: evalCache, book }, (k, m) => { progress[wi] = k / m; show(); }); }
       catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
       progress[wi] = 0;
       if (R.cancelled) return;

@@ -47,7 +47,7 @@ export class Engine {
     if (tag) { this.tags[tag] = (this.tags[tag] || 0) + 1; if (this.busy && this.runTag === tag) this.t.send("stop"); return; }
     this.gen++; if (this.busy) this.t.send("stop");
   }
-  analyse(fen, { movetime = 150, depth = null, multipv = 1, tag = null } = {}) {
+  analyse(fen, { movetime = 150, depth = null, cap = null, multipv = 1, tag = null } = {}) {
     const g = this.gen, tg = tag ? this.tags[tag] || 0 : 0;
     const stale = () => g !== this.gen || (tag && (this.tags[tag] || 0) !== tg);
     const job = async () => {
@@ -76,7 +76,7 @@ export class Engine {
       });
       this.t.send(`setoption name MultiPV value ${multipv}`);
       this.t.send(`position fen ${fen}`);
-      this.t.send(depth ? `go depth ${depth}` : `go movetime ${movetime}`);
+      this.t.send(depth ? `go depth ${depth}${cap ? ` movetime ${cap}` : ""}` : `go movetime ${movetime}`); // with both, Stockfish stops at whichever comes first
       await done;
       this.busy = false; this.runTag = null;
       if (stale()) return CANCELLED;

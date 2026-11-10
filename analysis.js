@@ -159,7 +159,9 @@ async function evaluate(engine, g, color, opts, onPos) {
     }
   } else for (let i = 0; i < n; i++) need.add(i);
   let k = 0; const depths = [];
-  const cache = opts.cache || null, mt = opts.movetime;
+  // Two modes: a target depth (the depth options in Games; same depth on a phone and a laptop, only slower)
+  // or a fixed time per position (older queues). "Effort" below is depth or milliseconds.
+  const cache = opts.cache || null, D = opts.depth || null, mt = D || opts.movetime;
   const forced = [];
   for (const i of need) {
     const t = terminal(g.fens[i]);
@@ -174,15 +176,16 @@ async function evaluate(engine, g, color, opts, onPos) {
     const inBook = opts.book && i < 24 && opts.book[g.fens[i].split(" ").slice(0, 4).join(" ")];
     const cheap = (!havePgn && (i < 8 || inBook)) || (prev && Math.abs(prev.cp) >= 700);
     const followed = !cheap && prev && prev.pv && prev.pv[0] === g.moves[i - 1]?.lan && prev.pv.length >= 2;
-    const time = cheap ? Math.max(25, Math.round(mt * 0.3)) : followed ? Math.max(40, Math.round(mt * 0.6)) : mt;
+    const time = D ? (cheap ? Math.max(8, D - 6) : followed ? D - 2 : D) : cheap ? Math.max(25, Math.round(mt * 0.3)) : followed ? Math.max(40, Math.round(mt * 0.6)) : mt;
     const hit = key && cache.get(key);
-    if (hit && hit.mt >= time) { evals[i] = { cp: hit.cp, pv: hit.pv }; onPos && onPos(++k, need.size); continue; }
-    const [line] = await engine.analyse(g.fens[i], { movetime: time });
+    if (hit && hit.mt >= time && !!hit.d === !!D) { evals[i] = { cp: hit.cp, pv: hit.pv }; onPos && onPos(++k, need.size); continue; }
+    // a depth search has a safety cap (15 s) so one huge position can't stall the queue
+    const [line] = await engine.analyse(g.fens[i], D ? { depth: time, cap: 15000 } : { movetime: time });
     const stm = g.fens[i].split(" ")[1];
     const cp = lineToCp(line);
     evals[i] = { cp: stm === "w" ? cp : -cp, pv: line ? line.pv : [] };
     if (line && !cheap && !followed && line.mate == null) depths.push(line.depth); // mate searches report huge depths
-    if (key && Math.abs(cp) < 700 && !(cache.get(key)?.mt > time)) cache.set(key, { cp: evals[i].cp, pv: evals[i].pv, mt: time });
+    if (key && Math.abs(cp) < 700 && !(cache.get(key)?.mt > time)) cache.set(key, { cp: evals[i].cp, pv: evals[i].pv, mt: D ? Math.min(time, line?.depth || 0) : time, d: !!D });
     onPos && onPos(++k, need.size);
   }
   for (const i of forced.reverse()) {
@@ -201,7 +204,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   if (!color) return { skipped: "player not in game" };
   if (H.Variant && !/^(standard|chess)$/i.test(H.Variant)) return { skipped: "variant" };
   if (g.moves.length < 10) return { skipped: "too short" };
-  const { evals, usedPgnEvals, depth } = await evaluate(engine, g, color, { movetime: opts.movetime || 150, cache: opts.cache, book: opts.book }, onPos);
+  const { evals, usedPgnEvals, depth } = await evaluate(engine, g, color, { movetime: opts.movetime || 150, depth: opts.depth || null, cache: opts.cache, book: opts.book }, onPos);
 
   const [base] = parseTc(H.TimeControl);
   const sign = color === "w" ? 1 : -1;
@@ -302,7 +305,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
     ph: score === undefined ? null : { mid: div.mid, end: div.end, mMid: div.mid !== null ? +g.fens[div.mid].split(" ")[5] : null, mEnd: div.end !== null ? +g.fens[div.end].split(" ")[5] : null, w0: wpAt(0), wMid: div.mid !== null ? wpAt(div.mid) : null, cMid: div.mid !== null ? cpAt(div.mid) : null, wEnd: div.end !== null ? wpAt(div.end) : null, cEnd: div.end !== null ? cpAt(div.end) : null, res: score * 100 },
     pst: { me: rnd(pst.me), opp: rnd(pst.opp) },
-    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), accuracy: avg(all), usedPgnEvals, depth, movetime: opts.movetime || 150,
+    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), accuracy: avg(all), usedPgnEvals, depth, movetime: opts.depth ? null : opts.movetime || 150, target: opts.depth || null,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),
