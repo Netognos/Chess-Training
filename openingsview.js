@@ -1,3 +1,4 @@
+import { familyTableHtml, bindFamilyTable } from "./openingtable.js";
 // Opening library + my repertoire.
 import { Chess } from "./vendor/chess.js";
 import { PIECES } from "./pieces.js";
@@ -129,10 +130,10 @@ export function repertoireView(v, C) {
   const A = st?.A;
   v.innerHTML = `<div class="card"><h2>Your choices</h2>
       <table>${slots.map(([k, side, l]) => { const o = OPENINGS.find((x) => x.id === ids[k]); return `<tr><td style="width:34%"><b>${l}</b></td><td>${o ? `<a href="#" data-op="${o.id}">${C.esc(o.name)}</a> <span class="muted small">${C.esc(o.eco)}</span>` : p.repertoire?.[k] ? C.esc(p.repertoire[k]) : `<span class="muted">Not chosen yet</span>`}</td><td style="text-align:right"><button class="btn secondary small" data-side="${side}">${o ? "Change" : "Choose"}</button></td></tr>`; }).join("")}</table></div>
-    ${st ? `<div class="card"><h2>Suggestions for a ${C.esc(st.typeName.toLowerCase())}</h2><p class="small muted">Based on your player type${st.aggression != null ? ` and your calm–sharp score (${st.aggression}/100)` : ""}.</p>
+    ${st ? `<div class="card"><h2>Suggestions for ${/^[aeiou]/i.test(st.typeName) ? "an" : "a"} ${C.esc(st.typeName.toLowerCase())}</h2><p class="small muted">Based on your player type${st.aggression != null ? ` and your calm–sharp score (${st.aggression}/100)` : ""}.</p>
       <table>${slots.map(([, side, l]) => `<tr><td style="width:34%"><b>${l}</b></td><td>${suggest(side).map(({ o }) => `<a href="#" data-op="${o.id}">${C.esc(o.name)}</a>`).join(" or ")}</td></tr>`).join("")}</table></div>` : `<div class="card"><p>Take the thinking test or analyse your games, and this page suggests openings that fit your style.</p></div>`}
-    ${A && A.openings.length ? `<div class="card"><h2>What you actually play</h2><p class="small muted">From your analysed games. Win chance after move 10 tells you whether the opening itself goes well.</p><div class="scroll"><table><tr><th>Colour</th><th>Opening</th><th>Games</th><th>Score</th><th>Win chance after move 10</th></tr>
-      ${A.openings.slice(0, 10).map((o) => `<tr><td>${o.color === "w" ? "White" : "Black"}</td><td>${C.esc(o.name)}</td><td>${o.games}</td><td>${o.scorePct}%</td><td>${o.wpAfter10 ?? "–"}${o.wpAfter10 != null ? "%" : ""}</td></tr>`).join("")}</table></div></div>` : ""}`;
+    ${A && A.families?.length ? `<div class="card"><h2>What you actually play</h2><p class="small muted">From your analysed games, grouped by opening family. Tap a family to see the variations. Win chance after the opening tells you whether the opening itself goes well.</p>${familyTableHtml(A.families, C.esc, { limit: 12, acc: false, tid: "own" })}</div>` : ""}`;
+  bindFamilyTable(v);
   v.querySelectorAll("[data-op]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); C.go("openings", { id: a.dataset.op }); }));
   v.querySelectorAll("[data-side]").forEach((b) => (b.onclick = () => { filt.side = b.dataset.side; filt.fit = !!st; C.go("openings"); }));
 }

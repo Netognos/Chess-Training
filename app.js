@@ -1,15 +1,16 @@
 import { Chess } from "./vendor/chess.js";
 import { Engine, lineToCp, winPct, fmtScore } from "./engine.js";
 import { Board } from "./board.js";
-import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey } from "./analysis.js";
+import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
 import { probe, testingMove, gradeTB, moveScore } from "./tb.js";
 import { mountExplorer, lichessToken, setLichessToken } from "./explorer.js";
+import { familyTableHtml, bindFamilyTable } from "./openingtable.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
-import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle } from "./test.js";
+import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle, testSummary } from "./test.js";
 import { openingsView, repertoireView } from "./openingsview.js";
 
 // ------------------------------------------------------------------ state
@@ -97,16 +98,16 @@ const ICONS = {
 const icon = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
 const SECTIONS = {
   home: { label: "Home", tabs: [["home", "Overview"], ["account", "Profile"], ["log", "Log & backup"]] },
-  analyse: { label: "Analyse", tabs: [["games", "Games"], ["report", "Report"]] },
+  analyse: { label: "Analyse", tabs: [["games", "Games"], ["report", "Report"], ["compare", "Compare"]] },
   train: { label: "Train", tabs: [["training", "Plan"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
   test: { label: "Test", tabs: [["test", "Test"], ["results", "Results"], ["profile", "Player profile"], ["practice", "Modules"]] },
   openings: { label: "Openings", tabs: [["openings", "Library"], ["repertoire", "My repertoire"]] },
 };
-const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
+const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", compare: "Compare players", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
   board: "Analysis board", notebook: "Notebook", test: "Thinking test", results: "Test results", profile: "Player profile", practice: "Training modules", openings: "Opening library", repertoire: "My repertoire" };
 const OC = () => ({ ...C, style: () => currentStyle(P(), C), Board, icon });
 const C = { gen: () => viewGen, P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
-const views = { home, account, games, report, training, puzzles, endgames, board, notebook, log,
+const views = { home, account, games, report, compare, training, puzzles, endgames, board, notebook, log,
   openings: (v, arg) => openingsView(v, arg, OC()), repertoire: (v) => repertoireView(v, OC()),
   test: (v) => testView(v, C), results: (v, a) => resultsView(v, C, a), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
@@ -122,6 +123,7 @@ function renderNav() {
   $("#pageTitle").textContent = TITLES[tab] ?? "";
 }
 window.__ccGo = (t, a) => go(t, a);
+window.__ccFetch = (opts) => fetchGames(P(), opts, () => {});
 // sticky offsets follow the real height of the top bar and the sub-tabs (the top bar can grow on small phones)
 function measureBars() {
   const r = document.documentElement.style;
@@ -240,25 +242,40 @@ function bindNextSteps(v, p) {
 
 // ------------------------------------------------------------------ GAMES
 let running = null;
+const IOKEY = "chesscoach.importOpts";
+// time per position → typical depth reached by Stockfish 19 lite on a laptop, and the rough playing strength of
+// Stockfish at that depth (published depth-vs-Elo tests; a phone reaches 1-2 plies less)
+const SPEEDS = [[50, "Quick · d11-13 · ≈2350 Elo"], [80, "Fast · d12-14 · ≈2450 Elo"], [150, "Normal · d14-16 · ≈2600 Elo"], [400, "Deep · d17-19 · ≈2750 Elo"], [1000, "Very deep · d20-22 · ≈2900 Elo"]];
+const TC_LABEL = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", correspondence: "Correspondence" };
+function importOpts() { try { const o = JSON.parse(localStorage.getItem(IOKEY)); if (o && Array.isArray(o.cats)) return o; } catch {} return { cats: ["rapid", "classical"], exact: "" }; }
+function readTcFilter(v) {
+  const cats = [...v.querySelectorAll("[data-tc]")].filter((x) => x.checked).map((x) => x.dataset.tc);
+  const exact = $("#tcExact", v).value.trim();
+  const specific = exact ? parseTcList(exact) : [];
+  return { cats, exact, specific };
+}
 function games(v) {
   const p = P();
+  const IO = importOpts();
   const list = Object.values(p.games).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   v.innerHTML = `<div class="card"><h2>Load & analyse games</h2>
     <div class="form">
       <label class="f">Sources<span class="row" style="gap:12px;color:var(--ink)"><label class="row small"><input type="checkbox" id="srcL" ${p.lichess ? "checked" : "disabled"}> Lichess${p.lichess ? ` (${esc(p.lichess)})` : ""}</label><label class="row small"><input type="checkbox" id="srcC" ${p.chesscom ? "checked" : "disabled"}> Chess.com${p.chesscom ? ` (${esc(p.chesscom)})` : ""}</label><label class="row small"><input type="checkbox" id="srcP" ${!p.lichess && !p.chesscom ? "checked" : ""}> PGN</label></span></label>
       <label class="f">Period<select id="months"><option value="1">Last month</option><option value="3" selected>Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></label>
-      <label class="f">Time control at least<select id="mintc"><option value="300">5+0</option><option value="600" selected>10+0</option><option value="1300">15+10</option><option value="1800">30+0</option></select></label>
       <label class="f">Max. number of games<input id="num" type="number" value="100" min="1" max="500"></label>
-      <label class="f">Analysis depth<select id="speed"><option value="80">Fast (≈ depth 12-14)</option><option value="150" selected>Normal (≈ depth 14-16)</option><option value="400">Deep (≈ depth 17-19)</option></select></label>
+      <label class="f">Analysis depth<select id="speed">${SPEEDS.map(([ms, l]) => `<option value="${ms}" ${ms === (IO.speed || 150) ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     </div>
     <div id="pgnBox" class="hidden" style="margin-top:10px"><textarea id="pgnText" placeholder="Paste PGN here (one or more games)…"></textarea>
       <div class="row" style="margin-top:6px"><input type="file" id="pgnFile" accept=".pgn,.txt"><label class="f" style="flex-direction:row;align-items:center;gap:6px">Your name in the PGN <input id="pgnName" value="${esc(p.pgnName || p.lichess || p.chesscom || "")}"></label></div></div>
-    <label class="row small" style="margin-top:10px"><input type="checkbox" id="corr"> Also include correspondence games from Lichess and Chess.com (daily)</label>
-    <label class="row small" style="margin-top:6px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for the style statistics on games from before this update)</label>
+    <div class="tcpick" style="margin-top:10px"><div class="small"><b>Time controls</b></div>
+      <div class="row" style="gap:6px;margin-top:4px;flex-wrap:wrap">${TC_CATS.map((c) => `<label class="chip"><input type="checkbox" data-tc="${c}" ${IO.cats.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div>
+      <label class="f" style="margin-top:6px">Or only these exact time controls (optional)<input id="tcExact" value="${esc(IO.exact || "")}" placeholder="e.g. 3+0, 3+2, 10+5 (minutes + increment)"></label>
+      <div class="small muted" id="tcHint"></div></div>
+    <label class="row small" style="margin-top:6px"><input type="checkbox" id="reanalyse"> Re-analyse games that are already loaded (needed for centipawn loss against your opponents on games analysed before v26)</label>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div></div>
     <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
-    <p class="small muted">"Time control at least 10+0" counts a game as base time + 40 × increment, so 8+2 also qualifies. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster.</p></div>
+    <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: d = how many half-moves Stockfish looks ahead per position on a laptop (a phone reaches 1-2 less); Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal is plenty for club games; Very deep takes about 6× as long.</p></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Depth</th><th>Opening</th></tr>
     ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
       const e = (l) => g.errors.filter((x) => x.label === l).length;
@@ -268,6 +285,11 @@ function games(v) {
   srcP.onchange = () => $("#pgnBox").classList.toggle("hidden", !srcP.checked);
   srcP.onchange();
   $("#pgnFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#pgnText").value = await f.text(); };
+  const hint = () => { const f = readTcFilter(v); const h = $("#tcHint", v);
+    h.style.color = f.specific === null ? "var(--bad)" : "";
+    h.textContent = f.specific === null ? "Couldn't read that list. Write it like 3+0, 5+3, 15+10." : f.specific.length ? `Only ${f.specific.map(([b, i]) => fmtTc(b + "+" + i)).join(", ")} (the boxes above are ignored).` : f.cats.length ? `Loading ${f.cats.map((c) => TC_LABEL[c].toLowerCase()).join(", ")} games.` : "Tick at least one time control.";
+    v.querySelectorAll("[data-tc]").forEach((x) => (x.closest(".chip").style.opacity = f.specific && f.specific.length ? ".45" : "")); };
+  v.querySelectorAll("[data-tc]").forEach((x) => (x.onchange = hint)); $("#tcExact", v).oninput = hint; hint();
   $("#go").onclick = () => runImport(v);
   const pq = loadQueue();
   if (running) { $("#prog").classList.remove("hidden"); }
@@ -278,18 +300,21 @@ function games(v) {
 
 function mostFrequentName(pgns) { const c = {}; for (const x of pgns) for (const t of ["White", "Black"]) { const m = new RegExp(`\\[${t} "([^"]+)"`).exec(x); if (m) c[m[1]] = (c[m[1]] || 0) + 1; } return Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || ""; }
 const tcEstimate = (tc) => { const m = /^(\d+)(?:\+(\d+))?$/.exec(tc || ""); return m ? +m[1] + 40 * +(m[2] || 0) : null; };
+// which Lichess perf types can contain these exact time controls
+const lichessCatsFor = (spec) => [...new Set(spec.map(([b, i]) => { const e = b + 40 * i; return e < 180 ? "bullet" : e < 480 ? "blitz" : e < 1500 ? "rapid" : "classical"; }))];
 async function fetchGames(p, opts, status) {
   const out = [];
   const since = Date.now() - opts.months * 30.4 * 86400000;
   if (opts.lichess && p.lichess) {
     status("Fetching games from Lichess…");
-    const q = new URLSearchParams({ max: opts.num * 2, since: Math.floor(since), clocks: "true", evals: "true", opening: "true", perfType: (opts.mintc >= 600 ? "rapid,classical" : "blitz,rapid,classical") + (opts.corr ? ",correspondence" : "") });
+    const cats = opts.tf.specific.length ? lichessCatsFor(opts.tf.specific) : opts.tf.cats;
+    const perf = [...new Set(cats.flatMap((c) => c === "bullet" ? ["ultraBullet", "bullet"] : [c]))].join(",");
+    const q = new URLSearchParams({ max: opts.num * (opts.tf.specific.length ? 4 : 2), since: Math.floor(since), clocks: "true", evals: "true", opening: "true", perfType: perf });
     const r = await fetch(`https://lichess.org/api/games/user/${encodeURIComponent(p.lichess)}?${q}`, { headers: { Accept: "application/x-chess-pgn" } });
     if (!r.ok) throw new Error(`Lichess answered ${r.status}. Is the username correct?`);
     for (const pgn of splitPgn(await r.text())) {
-      const tc = (/\[TimeControl "([^"]+)"/.exec(pgn) || [])[1];
-      if (tc === "-" || !tc) { if (!opts.corr) continue; }
-      else { const est = tcEstimate(tc); if (est === null || est < opts.mintc) continue; }
+      const tc = (/\[TimeControl "([^"]+)"/.exec(pgn) || [])[1] || "-";
+      if (!tcMatches(tc, "lichess", opts.tf)) continue;
       out.push({ pgn, name: p.lichess, src: "lichess" });
     }
   }
@@ -307,9 +332,8 @@ async function fetchGames(p, opts, status) {
       let m; try { m = await mr.json(); } catch { throw new Error(`Chess.com sent an unreadable answer for ${arch[i].slice(-7)}. Try again later.`); }
       for (const g of (m.games || []).reverse()) {
         if (g.rules !== "chess" || !g.pgn) continue;
-        if (g.time_class === "daily" && !opts.corr) continue;
         if ((g.end_time || 0) * 1000 < since) continue;
-        if (g.time_class !== "daily") { const est = tcEstimate(g.time_control); if (est === null || est < opts.mintc) continue; }
+        if (!tcMatches(g.time_class === "daily" ? "-" : g.time_control, "chess.com", opts.tf)) continue;
         out.push({ pgn: g.pgn, name: p.chesscom, src: "chess.com" });
       }
     }
@@ -348,7 +372,7 @@ function jobUI(text, pct) {
 function jobDone(text, q = null) {
   $("#jobBar").classList.remove("hidden");
   $("#jobText").textContent = text;
-  const b = $("#jobStop"); b.textContent = "Resume"; b.classList.toggle("hidden", !q);
+  const b = $("#jobStop"); b.textContent = "Resume"; b.classList.toggle("hidden", !q); $("#jobCancel").classList.toggle("hidden", !q);
   const t = $("#progText"); if (t) t.textContent = text;
   if (!q) setTimeout(() => { if (!running) $("#jobBar").classList.add("hidden"); }, 6000);
 }
@@ -356,7 +380,11 @@ function jobDone(text, q = null) {
 async function runImport(v) {
   const p = P();
   if (running) return toast("An analysis is already running");
-  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, corr: $("#corr").checked, pgn: $("#srcP").checked, months: +$("#months").value, mintc: +$("#mintc").value, num: +$("#num").value || 100 };
+  const tf = readTcFilter(v);
+  if (tf.specific === null) return toast("Couldn't read the exact time controls. Write them like 3+0, 5+3.");
+  if (!tf.specific.length && !tf.cats.length) return toast("Tick at least one time control.");
+  try { localStorage.setItem(IOKEY, JSON.stringify({ cats: tf.cats, exact: tf.exact, speed: +$("#speed").value })); } catch {}
+  const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, tf, num: +$("#num").value || 100 };
   const movetime = +$("#speed").value;
   const re = $("#reanalyse").checked;
   const src = [opts.lichess && "Lichess", opts.chesscom && "Chess.com", opts.pgn && "PGN"].filter(Boolean).join(" + ");
@@ -364,7 +392,7 @@ async function runImport(v) {
   try {
     if (!opts.lichess && !opts.chesscom && !opts.pgn) throw new Error("Choose at least one source.");
     const list = await fetchGames(p, opts, (t) => ($("#progText").textContent = t));
-    if (!list.length) throw new Error("No games found for this period and time control.");
+    if (!list.length) throw new Error("No games found for this period and these time controls.");
     const items = list.filter((x) => re || !p.games[gameKey(x.pgn)]);
     if (!items.length) { $("#progText").textContent = `${list.length} games found, all already analysed.`; return; }
     const q = { player: p.id, items, total: items.length, done: 0, added: 0, skipped: 0, movetime, src, started: new Date().toISOString() };
@@ -380,6 +408,7 @@ async function runImport(v) {
 
 // Several Stockfish workers in parallel (one game each): ~N× faster on multi-core devices.
 const pool = [];
+const evalCache = new Map(); // positions already analysed (e.g. shared opening moves), across games and engines
 function engineCount() {
   const cores = navigator.hardwareConcurrency || 2;
   const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -391,12 +420,14 @@ async function processQueue(q) {
   if (running) return;
   const p = S.players[q.player];
   if (!p) { saveQueue(null); return; }
-  running = { stop: false }; q.paused = false; saveQueue(q);
-  $("#jobStop").textContent = "Pause"; $("#jobStop").classList.remove("hidden");
+  let onCancel; const cancelled = new Promise((r) => (onCancel = r));
+  const R = (running = { stop: false, cancel: () => { R.stop = true; R.cancelled = true; onCancel(); } }); q.paused = false; saveQueue(q);
+  $("#jobStop").textContent = "Pause"; $("#jobStop").classList.remove("hidden"); $("#jobCancel").classList.remove("hidden");
   await keepAwake(true);
   const n = Math.min(engineCount(), q.items.length);
   jobUI(`Starting ${n} Stockfish engine${n > 1 ? "s" : ""}… (${q.items.length} games to go)`);
   const engines = enginePool(n);
+  const book = await import("./book.js").then((m) => m.BOOK).catch(() => null);
   const t0 = Date.now(), doneAtStart = q.done;
   const progress = {}; const depths = [];
   const show = () => {
@@ -409,13 +440,14 @@ async function processQueue(q) {
   const inflight = new Set();
   const worker = async (eng, wi) => {
     await eng.ready;
-    while (!running.stop) {
+    while (!R.stop) {
       const it = q.items.find((x) => !inflight.has(x)); if (!it) break;
       inflight.add(it);
       let r;
-      try { r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime }, (k, m) => { progress[wi] = k / m; show(); }); }
+      try { r = await analyseGame(eng, it.pgn, it.name, { movetime: q.movetime, cache: evalCache, book }, (k, m) => { progress[wi] = k / m; show(); }); }
       catch (e) { console.warn("Game failed", e); r = { skipped: "parse error" }; }
       progress[wi] = 0;
+      if (R.cancelled) return;
       q.items.splice(q.items.indexOf(it), 1); inflight.delete(it); q.done++;
       if (r.skipped) q.skipped++;
       else { const link = (/\[Link "([^"]+)"/.exec(it.pgn) || [])[1]; if (link) { r.site = link; r.id = link; } p.games[r.id] = r; q.added++; if (r.depth) depths.push(r.depth); save(); }
@@ -423,17 +455,26 @@ async function processQueue(q) {
     }
   };
   try {
-    await Promise.all(engines.map((e, i) => worker(e, i)));
-    if (running.stop && q.items.length) { // paused with games still to do (pausing during the last game just finishes)
+    await Promise.race([Promise.all(engines.map((e, i) => worker(e, i))), cancelled]);
+    if (R.cancelled) { // stop at once: kill the engines mid-game, keep what was finished, drop the rest
+      for (const e of pool) e.terminate(); pool.length = 0;
+      saveQueue(null);
+      if (q.added && S.players[q.player]) buildReport(p);
+      jobDone(`Analysis cancelled. ${q.added} game${q.added === 1 ? "" : "s"} finished and kept, ${q.items.length} not analysed.`);
+      if (q.added) logEvent("analysis", `Analysis cancelled after ${q.added} game${q.added === 1 ? "" : "s"} (${q.src}).`);
+      if (tab === "games" || tab === "report") go(tab);
+      return;
+    }
+    if (R.stop && q.items.length) { // paused with games still to do (pausing during the last game just finishes)
       if (!S.players[q.player]) { saveQueue(null); jobDone("Analysis stopped."); return; }
-      q.paused = true; saveQueue(q);
+      q.paused = true; q.secs = (q.secs || 0) + (Date.now() - t0) / 1000; saveQueue(q);
       if (q.added) buildReport(p);
       jobDone(`Paused: ${q.items.length} game${q.items.length === 1 ? "" : "s"} left.`, q);
       return;
     }
     saveQueue(null);
     for (const e of pool) e.terminate(); pool.length = 0; // free the extra workers
-    const secs = Math.round((Date.now() - t0) / 1000);
+    const secs = Math.round((Date.now() - t0) / 1000 + (q.secs || 0));
     jobDone(`Done: ${q.added} game${q.added === 1 ? "" : "s"} analysed in ${secs < 60 ? secs + " s" : "~" + Math.round(secs / 60) + " min"}${q.skipped ? `, ${q.skipped} skipped (too short or the name didn't match)` : ""}.`);
     if (q.added) { buildReport(p); logEvent("analysis", `${q.added} game${q.added === 1 ? "" : "s"} analysed (${q.src}). Total ${Object.keys(p.games).length}.`); toast("Analysis done. See Report."); if (S.current === p.id && tab === "games") setTimeout(() => go("report"), 900); }
   } finally { running = null; keepAwake(false); }
@@ -468,25 +509,35 @@ function report(v) {
   const p = P();
   const gs = Object.values(p.games);
   if (!gs.length) { v.innerHTML = `<div class="card"><h2>Report</h2><p>No analysed games yet.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
-  const A = aggregate(gs), D = diagnose(A, p);
-  const ph = ["opening", "middlegame", "endgame"].filter((x) => A.phaseAcc[x] != null);
+  p.settings ||= {};
+  const tcs = TC_CATS.filter((c) => gs.some((g) => g.tc === c)).concat(gs.some((g) => !TC_CATS.includes(g.tc)) ? ["unknown"] : []);
+  let sel = (p.settings.repTc || []).filter((c) => tcs.includes(c));
+  const use = sel.length ? gs.filter((g) => sel.includes(TC_CATS.includes(g.tc) ? g.tc : "unknown")) : gs;
+  const A = aggregate(use), D = diagnose(A, p);
+  const C = A.cpl, E = A.errorCounts || {}, myMoves = Object.values(A.phaseMoves || {}).reduce((a, b) => a + b, 0);
+  const accAll = myMoves ? +(Object.entries(A.phaseAcc).reduce((a, [k, x]) => a + x * A.phaseMoves[k], 0) / myMoves).toFixed(1) : null;
+  const per100 = (k) => (myMoves ? ` <span class="muted">(${(100 * (E[k] || 0) / myMoves).toFixed(1)}/100 moves)</span>` : "");
   const hist = p.reports.slice(0, 6);
-  v.innerHTML = `
-  <div class="card"><h2>Overview: ${A.games} games</h2><div class="stats">
-    <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score: ${A.wins} won · ${A.draws} drawn · ${A.losses} lost</div></div>
-    ${ph.map((x) => `<div class="stat"><div class="v">${A.phaseAcc[x]}</div><div class="l">${x} accuracy · ${A.seriousPer100[x]} errors/100 moves</div></div>`).join("")}
-    <div class="stat"><div class="v">${A.conversion.chances ? Math.round(100 * A.conversion.won / A.conversion.chances) + "%" : "–"}</div><div class="l">won positions converted (${A.conversion.won}/${A.conversion.chances})</div></div>
-    <div class="stat"><div class="v">${A.resilience.lost ? A.resilience.saved + "/" + A.resilience.lost : "–"}</div><div class="l">lost positions saved</div></div>
+  const tcBar = tcs.length > 1 ? `<div class="chips" id="repTc"><button class="chip ${sel.length ? "" : "on"}" data-rtc="">All (${gs.length})</button>${tcs.map((c) => `<button class="chip ${sel.includes(c) ? "on" : ""}" data-rtc="${c}">${TC_LABEL[c] || "Unknown"} (${gs.filter((g) => (TC_CATS.includes(g.tc) ? g.tc : "unknown") === c).length})</button>`).join("")}</div>` : "";
+  v.innerHTML = `${tcBar}
+  <div class="card"><h2>Overview: ${A.games} game${A.games === 1 ? "" : "s"}${sel.length ? ` <span class="muted small">(${sel.map((c) => (TC_LABEL[c] || "unknown").toLowerCase()).join(" + ")})</span>` : ""}</h2><div class="stats">
+    <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score · won ${np(A.wins, A.games)} · drawn ${np(A.draws, A.games)} · lost ${np(A.losses, A.games)}</div></div>
+    <div class="stat"><div class="v">${accAll ?? "–"}</div><div class="l">accuracy${C?.all?.opp ? ` · opponents ${C.all.opp.acc}` : ""}</div></div>
+    <div class="stat"><div class="v">${C?.all?.me ? rng(C.all.me.acpl, C.all.me.lo, C.all.me.hi, C.all.me.games) : "–"}</div><div class="l">average centipawn loss${C?.all?.opp ? ` · opponents ${C.all.opp.acpl}` : " (re-analyse to see it)"}</div></div>
+    <div class="stat"><div class="v">${E.blunder || 0}</div><div class="l">blunders${per100("blunder")} · mistakes ${E.mistake || 0}${per100("mistake")} · inaccuracies ${E.inaccuracy || 0}${per100("inaccuracy")}</div></div>
+    <div class="stat"><div class="v">${A.conversion.chances ? Math.round(100 * A.conversion.won / A.conversion.chances) + "%" : "–"}</div><div class="l">winning positions converted: ${A.conversion.won} of ${A.conversion.chances}</div></div>
+    <div class="stat"><div class="v">${A.resilience.lost ? Math.round(100 * A.resilience.saved / A.resilience.lost) + "%" : "–"}</div><div class="l">lost positions saved: ${A.resilience.saved} of ${A.resilience.lost}</div></div>
   </div>
   <details class="small" style="margin-top:8px"><summary><b>What do these numbers mean?</b></summary>
   <ul>
     <li><b>Score</b> = your points as a percentage: a win is 1 point, a draw ½, a loss 0, divided by the number of games. So it's not a win/loss ratio: draws count for half. 50% means you score as much as your opponents, which is normal when the matchmaking puts you against equally rated players.</li>
     <li><b>Accuracy</b> (0-100) = how close your moves are to Stockfish's best move, with the same formula as Lichess. Accuracy follows the win chance, so small inaccuracies in a balanced position cost more than in a position that's already won. Over a whole game, 90+ is very good, and 80-90 is normal for club level in rapid.</li>
-    <li><b>Errors/100 moves</b> = mistakes + blunders per 100 of your own moves in that phase. A <b>blunder</b> costs at least 15% win chance, a <b>mistake</b> at least 10%, an <b>inaccuracy</b> at least 5% (Lichess thresholds).</li>
+    <li><b>Centipawn loss (CPL)</b> = how much worse than the engine's best move your move was, in hundredths of a pawn, averaged over your moves (evaluations capped at ±10 pawns, like Lichess). Club players are often around 40-80, masters under 25. The small range next to it is the 95% interval: the fewer games, the wider.</li>
+    <li><b>Blunder / mistake / inaccuracy</b>: a move that costs at least 15% / 10% / 5% win chance (Lichess thresholds). Shown as a count and per 100 of your own moves.</li>
     <li><b>Converted / saved</b>: games where your win chance went above 85% (or below 15%), and how they ended.</li>
     <li><b>Analysis depth</b>: ${A.depth ? `Stockfish 19 (lite) looked on average <b>${A.depth} half-moves</b> deep per position` : "unknown for older games"}${A.serverAnalysed ? `; ${A.serverAnalysed} games reused the Lichess server analysis` : ""}. Depth 14-16 reliably finds mistakes and blunders at club level, and depth 18+ is roughly what Lichess uses for a quick server analysis.</li>
   </ul></details></div>
-  ${phasesHtml(A.phases, Object.keys(p.games).length)}
+  ${phasesHtml(A.phases, A.games, C)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
      ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}</div>
@@ -495,9 +546,8 @@ function report(v) {
     ${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week${D.plan.split[w.what] !== undefined ? ` (${D.plan.split[w.what]}%)` : ""}${w.weak ? ' <span class="pill mistake">focus</span>' : ""}</b><span class="small">${esc(w.how)}</span></div>`).join("")}</div>
   <div class="card"><h2>What kind of errors?</h2><p class="small muted">Mistakes and blunders by type (one error can have several tags).</p>
     <table>${Object.entries(A.tags).map(([t, n]) => `<tr><td>${esc(t)}</td><td>${n}</td><td class="small muted">${esc(TAG_ADVICE[t]?.why || "")}</td></tr>`).join("") || "<tr><td>None</td></tr>"}</table></div>
-  <div class="card"><h2>Openings</h2><div class="scroll"><table><tr><th>Colour</th><th>Opening</th><th>Games</th><th>Score</th><th>Win chance after move 10</th><th>Opening accuracy</th></tr>
-    ${A.openings.slice(0, 15).map((o) => `<tr><td>${o.color === "w" ? "White" : "Black"}</td><td>${esc(o.name)}</td><td>${o.games}</td><td>${o.scorePct}%</td><td>${o.wpAfter10 ?? "–"}${o.wpAfter10 !== null ? "%" : ""}</td><td>${o.acc ?? "–"}</td></tr>`).join("")}</table></div>
-    <p class="small muted">Win chance after move 10 is below 45%? Then the opening isn't working for you. A low score while the win chance is fine means the problem comes later in the game.</p></div>
+  <div class="card"><h2>Openings</h2><p class="small muted" style="margin-top:-6px">Grouped by opening family. Tap a family to see the variations you actually played.</p>${familyTableHtml(A.families, esc, { tid: "rep" })}
+    <p class="small muted">Win chance after the opening below 45%? Then the opening isn't working for you. A low score while the win chance is fine means the problem comes later in the game.</p></div>
   <div class="card"><h2>Repertoire</h2>${repertoireHtml(p, A)}</div>
   <div class="card"><h2>Endgames reached</h2><table><tr><th>Type</th><th>Games</th><th>Score</th><th>Accuracy</th></tr>
     ${Object.entries(A.endgames).map(([t, e]) => `<tr><td>${esc(t)}</td><td>${e.games}</td><td>${e.scorePct}%</td><td>${e.acc}</td></tr>`).join("") || "<tr><td colspan=4 class='muted'>No endgames reached yet</td></tr>"}</table></div>
@@ -505,7 +555,9 @@ function report(v) {
     ${hist.map((h) => `<tr><td>${h.date}</td><td>${h.summary.games}</td><td>${h.summary.scorePct}%</td>${["opening", "middlegame", "endgame"].map((x) => `<td>${h.summary.phaseAcc[x] ?? "–"} / ${h.summary.per100[x] ?? "–"}</td>`).join("")}<td class="small">${esc(h.summary.topTags[0] || "")}</td></tr>`).join("")}</table></div><p class="small muted">Per phase: accuracy / errors per 100 moves.</p></div>` : ""}
   <div class="card"><h2>Next</h2><div class="row"><button class="btn" id="toTrain">Start training</button><button class="btn secondary" id="toProfile">Your style & player profile</button></div></div>
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
-  bindRepertoire(v, p);
+  bindRepertoire(v, p); bindFamilyTable(v);
+  v.querySelectorAll("[data-rtc]").forEach((b) => (b.onclick = () => { const c = b.dataset.rtc;
+    p.settings.repTc = !c ? [] : sel.includes(c) ? sel.filter((x) => x !== c) : [...sel, c]; save(); go("report"); }));
   $("#copyRep").onclick = () => copy(claudeSummary(p, A, D));
   $("#toTrain").onclick = () => go("training");
   $("#toProfile").onclick = () => go("profile");
@@ -537,7 +589,9 @@ function bindRepertoire(v, p) {
 }
 function claudeSummary(p, A, D) {
   return `I'm training my chess with my Chess Coach app. Here is my profile. Help me with a concrete plan and explanations.\n\nPlayer: ${p.name}${p.rating ? `, rating ~${p.rating}` : ""}${p.goal ? `, goal: ${p.goal}` : ""}, ${p.hours} h/week.\n` +
-    (A.phases ? `Phases (Lichess division, win-chance change per phase): opening ${A.phases.phase.opening.avg}%, middlegame ${A.phases.phase.middlegame.avg ?? "-"}%, endgame ${A.phases.phase.endgame.avg ?? "-"}%. After the opening: ${A.phases.flow.afterOpening}% win chance; entering the endgame: ${A.phases.flow.afterMiddlegame ?? "-"}%. Most lost in the ${A.phases.weakest}.\n` : "") +
+    (A.phases ? `Phases (Lichess division; win-chance points each phase adds, averaged over all games, start ${A.phases.start}% → score ${A.phases.flow.result}%): opening ${A.phases.contrib.opening.avg}, middlegame ${A.phases.contrib.middlegame.avg}, endgame ${A.phases.contrib.endgame.avg}. Middlegame from move ~${A.phases.flow.midMove ?? "-"}, endgame from move ~${A.phases.flow.endMove ?? "-"} (reached in ${A.phases.flow.reachedEnd}% of games). ${A.phases.verdict === "relative" ? `No phase lost on balance; smallest edge in the ${A.phases.weakest}.` : A.phases.weakest ? `Most lost in the ${A.phases.weakest}.` : ""}\n` : "") +
+    (A.cpl ? `Centipawn loss me vs opponents: ${["opening", "middlegame", "endgame", "all"].filter((k) => A.cpl[k]?.me).map((k) => `${k} ${A.cpl[k].me.acpl} vs ${A.cpl[k].opp?.acpl ?? "?"}`).join(", ")}.\n` : "") +
+    (A.families?.length ? `Opening families: ${A.families.slice(0, 6).map((f) => `${f.color === "w" ? "W" : "B"} ${f.name} (${f.games}x, +${f.wins}=${f.draws}-${f.losses}, ${f.scorePct}%)`).join("; ")}.\n` : "") +
     `Analysed games: ${A.games}, score ${A.scorePct}%.\nAccuracy per phase: ${Object.entries(A.phaseAcc).map(([k, x]) => `${k} ${x} (${A.seriousPer100[k]} errors/100 moves)`).join(", ")}.\n` +
     `Error types: ${Object.entries(A.tags).map(([k, n]) => `${k}: ${n}`).join("; ")}.\nWinning positions converted: ${A.conversion.won}/${A.conversion.chances}; lost positions saved: ${A.resilience.saved}/${A.resilience.lost}.\n` +
     `Openings: ${A.openings.slice(0, 6).map((o) => `${o.color === "w" ? "W" : "B"} ${o.name} (${o.games}x, ${o.scorePct}%, win chance after move 10 ${o.wpAfter10 ?? "?"}${o.wpAfter10 != null ? "%" : ""})`).join("; ")}.\n` +
@@ -810,35 +864,133 @@ function endgames(v, arg) {
 // ------------------------------------------------------------------ phases and transitions (report)
 const PH_NAME = { opening: "Opening", middlegame: "Middlegame", endgame: "Endgame" };
 const sgn = (x, d = 1) => (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(d);
-function phasesHtml(F, total) {
-  if (!F) return `<div class="card"><h2>Phases and transitions</h2><p class="muted">None of your games has the phase data yet. Re-analyse them (Games → tick "Re-analyse games already analysed") to see where you gain and lose.</p></div>`;
-  const P = F.phase, fl = F.flow;
-  const col = (k) => { const x = P[k]; if (!x.games) return `<div class="phase"><div class="pn">${PH_NAME[k]}</div><div class="muted small">not reached</div></div>`;
-    return `<div class="phase ${k === F.weakest ? "leak" : k === F.strongest ? "gainer" : ""}"><div class="pn">${PH_NAME[k]}</div><div class="pv">${sgn(x.avg)}<small>%</small></div><div class="small muted">average win-chance change · ${x.games} game${x.games === 1 ? "" : "s"}</div><div class="small">lost ≥ 10% in ${x.lost10}% · gained ≥ 10% in ${x.won10}%</div></div>`; };
-  const outRow = (label, o) => (o ? `<tr><td>${label}</td><td>${o.n}</td><td>${o.win}%</td><td>${o.draw}%</td><td>${o.loss}%</td><td><b>${o.score}%</b></td></tr>` : `<tr><td>${label}</td><td>0</td><td colspan="4" class="muted">no games</td></tr>`);
+const np = (n, tot) => `${n}${tot ? ` <span class="muted">(${Math.round((100 * n) / tot)}%)</span>` : ""}`;
+const rng = (x, lo, hi, n, unit = "") => `${x}${unit}${lo != null && hi != null && isFinite(lo) && isFinite(hi) ? ` <span class="rng" title="95% range">${lo}–${hi}${unit}</span>` : ""}${n != null && n < 10 ? ` <span class="pill few" title="Fewer than 10 games: the range shows how much this can still move">few games</span>` : ""}`;
+function phasesHtml(F, total, C) {
+  if (!F) return `<div class="card"><h2>How your games go</h2><p class="muted">None of these games has the phase data yet. Re-analyse them (Games → tick "Re-analyse games that are already loaded") to see where you gain and lose.</p></div>`;
+  const P = F.phase, fl = F.flow, K = F.contrib, n = F.games;
+  const leak = F.verdict && F.verdict !== "relative" ? F.weakest : null;
+  const box = (k) => { const c = K[k], x = P[k];
+    return `<div class="phase ${k === leak ? "leak" : k === F.strongest && K[k].avg > 0 ? "gainer" : ""}"><div class="pn">${PH_NAME[k]}</div>
+      <div class="pv">${sgn(c.avg)}</div><div class="small rng">${c.lo !== null ? `95% range ${sgn(c.lo)} to ${sgn(c.hi)}` : "range needs 2+ games"}</div>
+      <div class="small muted">reached in ${np(x.games, n)} games${x.games ? `; in those games ${sgn(x.avg)} each` : ""}</div>
+      ${x.games ? `<div class="small">lost ≥ 10 points in ${np(Math.round((x.lost10 * x.games) / 100), x.games)} · gained ≥ 10 in ${np(Math.round((x.won10 * x.games) / 100), x.games)}</div>` : ""}</div>`; };
+  const W = F.weakest ? K[F.weakest] : null;
+  const verdict = !W ? `<p class="small muted">At least 3 games per phase are needed before naming your weakest phase.</p>`
+    : F.verdict === "relative" ? `<p><b>You don't lose win chance in any phase on balance.</b> Your smallest edge is in the ${F.weakest} (${sgn(W.avg)} per game)${F.strongest ? `, the biggest in the ${F.strongest} (${sgn(K[F.strongest].avg)})` : ""}. Together they make up your score: ${F.start}% ${["opening", "middlegame", "endgame"].map((k) => `${K[k].avg < 0 ? "−" : "+"} ${Math.abs(K[k].avg)}`).join(" ")} = ${fl.result}%.</p>`
+    : `<p><b>You leave the most in the ${F.weakest}</b>: ${sgn(W.avg)} points of win chance per game${F.verdict === "likely" ? " (the 95% range still crosses zero, so it isn't certain yet)" : ""}${F.strongest ? `; ${K[F.strongest].avg > 0 ? "you gain most" : "you lose least"} in the ${F.strongest} (${sgn(K[F.strongest].avg)})` : ""}. ${PH_TIP[F.weakest]}</p>`;
   const L = { better: "Better (≥ +1)", equal: "Equal (−1 … +1)", worse: "Worse (≤ −1)" };
-  const tip = F.weakest === "opening" ? "Most is lost before the middlegame starts: look at your openings (Openings → My repertoire) and the first critical decisions."
-    : F.weakest === "middlegame" ? "Most is lost in the middlegame: calculation, plans and tactics. Puzzles from your games and the thinking test target exactly this."
-    : F.weakest === "endgame" ? "Most is lost in the endgame: technique and theory. Train the endgames for your level (Train → Endgames)." : "";
-  const tm = F.T.openToMid;
-  return `<div class="card"><h2>Phases and transitions</h2>
-    <p class="small muted" style="margin-top:-6px">${F.games} of ${total} game${total === 1 ? "" : "s"}. Phases are divided like Lichess does it. Each phase shows how much win chance you gain or lose in it, from the start (≈ 50%) to your actual result.</p>
-    ${total > F.games ? `<div class="feedback warn small">${total - F.games} older game${total - F.games === 1 ? " has" : "s have"} no phase data yet and ${total - F.games === 1 ? "is" : "are"} left out here (the accuracy per phase above still mixes in the old division for ${total - F.games === 1 ? "it" : "them"}). Re-analyse: Games → tick "Re-analyse games already analysed" → Load &amp; analyse.</div>` : ""}
-    <div class="phases">${["opening", "middlegame", "endgame"].map(col).join('<div class="arrow" aria-hidden="true">→</div>')}</div>
-    ${F.weakest ? (P[F.weakest].avg < 0 ? `<p><b>You leave the most in the ${F.weakest}</b> (${sgn(P[F.weakest].avg)}% per game)${F.strongest && F.strongest !== F.weakest ? `, and do best in the ${F.strongest} (${sgn(P[F.strongest].avg)}%)` : ""}. ${tip}</p>`
-      : `<p><b>You don't lose win chance in any phase on average.</b> Your smallest gain is in the ${F.weakest} (${sgn(P[F.weakest].avg)}% per game)${F.strongest && F.strongest !== F.weakest ? `, the biggest in the ${F.strongest} (${sgn(P[F.strongest].avg)}%)` : ""}.</p>`) : `<p class="small muted">At least 3 games per phase are needed before naming your weakest phase.</p>`}
-    <div class="stats" style="margin:10px 0">
-      ${fl.afterOpening !== null ? `<div class="stat"><div class="v">${fl.afterOpening}%</div><div class="l">win chance after the opening (${sgn(fl.cpAfterOpening, 2)}), middlegame from move ${fl.midMove}</div></div>` : `<div class="stat"><div class="v">–</div><div class="l">no game reached a middlegame</div></div>`}
-      ${fl.afterMiddlegame !== null ? `<div class="stat"><div class="v">${fl.afterMiddlegame}%</div><div class="l">win chance entering the endgame (${sgn(fl.cpAfterMiddlegame, 2)}), from move ${fl.endMove} · ${fl.reachedEnd}% of games</div></div>` : `<div class="stat"><div class="v">–</div><div class="l">no game reached an endgame</div></div>`}
-      <div class="stat"><div class="v">${fl.result}%</div><div class="l">final score</div></div></div>
+  const cnt = (o, k) => Math.round((o[k] * o.n) / 100);
+  const outRow = (label, o) => (o ? `<tr><td>${label}</td><td>${o.n}</td><td>${np(cnt(o, "win"), o.n)}</td><td>${np(cnt(o, "draw"), o.n)}</td><td>${np(cnt(o, "loss"), o.n)}</td><td><b>${o.score}%</b></td></tr>` : `<tr><td>${label}</td><td>0</td><td colspan="4" class="muted">no games</td></tr>`);
+  const tm = F.T.openToMid, E = F.ended;
+  const accRow = (k) => { const m = C?.[k]?.me, o = C?.[k]?.opp; if (!m) return `<tr><td>${PH_NAME[k] || "Whole game"}</td><td colspan="6" class="muted">${k === "all" ? "no data" : "not reached"}</td></tr>`;
+    return `<tr${k === "all" ? ' class="tot"' : ""}><td>${PH_NAME[k] || "Whole game"}</td><td><b>${rng(m.acpl, m.lo, m.hi, m.games)}</b></td><td>${o ? rng(o.acpl, o.lo, o.hi) : "–"}</td><td>${m.acc}</td><td>${o ? o.acc : "–"}</td><td>${m.blunders + m.mistakes} <span class="muted">(${m.per100}/100)</span></td><td>${o ? `${o.blunders + o.mistakes} <span class="muted">(${o.per100}/100)</span>` : "–"}</td></tr>`; };
+  return `<div class="card"><h2>How your games go</h2>
+    <p class="small muted" style="margin-top:-6px">${n} of ${total} game${total === 1 ? "" : "s"}, split into phases the way Lichess does it. The numbers are points of win chance: you start a game at about ${F.start}%, and your score is where you end up. Each phase shows how much it adds or takes away, averaged over ${n === 1 ? "that game" : `all ${n} games`}, so the three add up to your score.</p>
+    ${total > n ? `<div class="feedback warn small">${total - n} older game${total - n === 1 ? " has" : "s have"} no phase data yet and ${total - n === 1 ? "is" : "are"} left out here. Re-analyse: Games → tick "Re-analyse games that are already loaded" → Load &amp; analyse.</div>` : ""}
+    <div class="phases flow"><div class="phase end"><div class="pn">Start</div><div class="pv">${F.start}<small>%</small></div><div class="small muted">win chance at move 1</div></div>
+      ${["opening", "middlegame", "endgame"].map((k) => `<div class="arrow" aria-hidden="true">+</div>${box(k)}`).join("")}
+      <div class="arrow" aria-hidden="true">=</div><div class="phase end"><div class="pn">Score</div><div class="pv">${fl.result}<small>%</small></div><div class="small muted">your result</div></div></div>
+    ${verdict}
+    <h3>Timeline of a typical game</h3>
+    <div class="timeline">
+      <div><b>Opening</b> → move ${fl.midMove ?? "–"}<div class="small muted">${E.opening ? `${np(E.opening, n)} games already ended here` : "no game ended here"}</div></div>
+      <div><b>Middlegame</b>${fl.midMove ? ` from move ${fl.midMove}` : ""}${fl.endMove ? ` → ${fl.endMove}` : ""}<div class="small muted">${fl.afterOpening !== null ? `you come out of the opening at ${fl.afterOpening}% (${sgn(fl.cpAfterOpening, 2)}) · ` : ""}${np(E.middlegame, n)} games ended here</div></div>
+      <div><b>Endgame</b>${fl.endMove ? ` from move ${fl.endMove}` : ""}<div class="small muted">${fl.afterMiddlegame !== null ? `reached in ${np(E.endgame, n)} games, entering at ${fl.afterMiddlegame}% (${sgn(fl.cpAfterMiddlegame, 2)})` : "no game reached an endgame"}</div></div></div>
+    <h3>You against your opponents, per phase</h3>
+    ${C ? `<div class="scroll"><table class="acctable"><tr><th>Phase</th><th>Your CPL</th><th>Opponents' CPL</th><th>Your accuracy</th><th>Opponents'</th><th>Your mistakes + blunders</th><th>Opponents'</th></tr>${["opening", "middlegame", "endgame", "all"].map(accRow).join("")}</table></div>
+      <p class="small muted">CPL = average centipawn loss per move (lower is better). The small range is the 95% interval: with few games it is wide, and two numbers whose ranges overlap aren't really different. Everyone makes the most errors in the middlegame, so compare yourself with your opponents in the same phase, not one phase with another.${C.games < n ? ` Based on ${C.games} game${C.games === 1 ? "" : "s"}: re-analyse the others to include them.` : ""}</p>`
+      : `<p class="small muted">Re-analyse your games to compare your centipawn loss and errors with your opponents', phase by phase.</p>`}
     <h3>After the opening → final result</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.opening[k])).join("")}</table></div>
-    <h3>After the opening → entering the endgame</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Still better</th><th>Equal</th><th>Worse</th></tr>${["better", "equal", "worse"].map((k) => tm[k] ? `<tr><td>${L[k]}</td><td>${tm[k].n}</td><td>${tm[k].better}%</td><td>${tm[k].equal}%</td><td>${tm[k].worse}%</td></tr>` : `<tr><td>${L[k]}</td><td>0</td><td colspan="3" class="muted">no games reached an endgame</td></tr>`).join("")}</table></div>
+    <h3>After the opening → entering the endgame</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Still better</th><th>Equal</th><th>Worse</th></tr>${["better", "equal", "worse"].map((k) => tm[k] ? `<tr><td>${L[k]}</td><td>${tm[k].n}</td><td>${np(cnt(tm[k], "better"), tm[k].n)}</td><td>${np(cnt(tm[k], "equal"), tm[k].n)}</td><td>${np(cnt(tm[k], "worse"), tm[k].n)}</td></tr>` : `<tr><td>${L[k]}</td><td>0</td><td colspan="3" class="muted">no games reached an endgame</td></tr>`).join("")}</table></div>
     <h3>Entering the endgame → final result</h3><div class="scroll"><table><tr><th>Entering the endgame</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.middlegame[k])).join("")}</table></div>
     <details class="small" style="margin-top:8px"><summary><b>How is this worked out?</b></summary><ul>
       <li><b>Phases</b> follow the Lichess rules (its "Divider"): the middlegame starts at the first position with at most 10 pieces other than kings and pawns, or with fewer than 4 pieces left on a player's back rank, or where white and black pieces are clearly mixed. The endgame starts when at most 6 pieces other than kings and pawns are left. Chess.com doesn't publish its rules.</li>
-      <li><b>Win chance</b> uses the Lichess formula on the Stockfish evaluation, from your point of view. The phase change is the win chance at the end of the phase minus the one at its start; the end of the game counts as your result (100 win, 50 draw, 0 loss), so a loss on time or a resignation counts too.</li>
+      <li><b>Win chance</b> uses the Lichess formula on the Stockfish evaluation, from your point of view. A phase's number is the win chance at its end minus the one at its start; the end of the game counts as your result (100 win, 50 draw, 0 loss), so a loss on time or a resignation counts too. A game that never reaches a phase adds 0 for it, which is why the phases add up to your score.</li>
+      <li><b>Why this, and not the number of blunders?</b> Win chance is shared: what you lose, your opponent gains. So a phase where you lose points is a phase where your opponents outplay you. The middlegame has the most blunders for every player because it is the longest and hardest phase; that alone isn't a weakness.</li>
       <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, at the moment the phase changes.</li>
-      <li>${total - F.games ? `${total - F.games} older game${total - F.games === 1 ? " has" : "s have"} no phase data yet: re-analyse to include ${total - F.games === 1 ? "it" : "them"}.` : "All analysed games are included."}</li></ul></details></div>`;
+      <li><b>95% range</b>: if you played many more games like these, the true average would lie in this range 95% of the time. With fewer than 10 games it is shown with a "few games" label.</li></ul></details></div>`;
+}
+const PH_TIP = { opening: "Look at your openings (Openings → My repertoire) and the first critical decisions after theory.", middlegame: "Calculation, plans and tactics: puzzles from your games and the thinking test target exactly this.", endgame: "Technique and theory: train the endgames for your level (Train → Endgames)." };
+
+// ------------------------------------------------------------------ COMPARE
+let cmpExtern = null; // players read from a backup file (kept in memory only, never saved)
+function compare(v) {
+  const me = P(); me.settings ||= {};
+  const others = Object.values(S.players).filter((x) => x.id !== me.id).map((x) => ({ key: "p:" + x.id, name: x.name, p: x }))
+    .concat(cmpExtern ? Object.values(cmpExtern.players).map((x) => ({ key: "f:" + x.id, name: `${x.name} (from ${cmpExtern.file})`, p: x })) : []);
+  const pick = others.find((o) => o.key === me.settings.cmpWith) || others[0] || null;
+  const tcSel = me.settings.cmpTc || "";
+  const pickHtml = `<div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <label class="f">Compare ${esc(me.name)} with<select id="cmpWho">${others.length ? others.map((o) => `<option value="${esc(o.key)}" ${pick && o.key === pick.key ? "selected" : ""}>${esc(o.name)}</option>`).join("") : `<option value="">(no other player yet)</option>`}</select></label>
+      <label class="f">Time controls<select id="cmpTc"><option value="">All</option>${TC_CATS.map((c) => `<option value="${c}" ${c === tcSel ? "selected" : ""}>${TC_LABEL[c]}</option>`).join("")}</select></label>
+      <label class="btn secondary" style="cursor:pointer">Load a player from a backup file<input type="file" id="cmpFile" accept=".json" class="visually-hidden"></label></div>
+    <p class="small muted">To compare with a friend, a coach or a stronger player: add them as a player (player menu at the top → "+ New player"), fill in their Lichess or Chess.com name and load their games. Or load a backup file they sent you (Home → Log &amp; backup); it is only read here, not saved.</p>`;
+  if (!pick) { v.innerHTML = `<div class="card"><h2>Who to compare</h2>${pickHtml}</div>`; bindCompare(v, me); return; }
+  const other = pick.p;
+  const sel = (p) => Object.values(p.games || {}).filter((g) => !tcSel || g.tc === tcSel);
+  const ga = sel(me), gb = sel(other);
+  const A = ga.length ? aggregate(ga) : null, B = gb.length ? aggregate(gb) : null;
+  const TA = testSummary(me, A), TB = testSummary(other, B);
+  // one row: label, value for each side, which direction is better ("hi" / "lo" / null), optional ranges for overlap
+  const rows = [];
+  const add = (label, a, b, better = null, fmt = (x) => x, ra = null, rb = null) => rows.push({ label, a, b, better, fmt, ra, rb });
+  const sec = (label) => rows.push({ sec: label });
+  const myMoves = (X) => Object.values(X.phaseMoves || {}).reduce((a, b) => a + b, 0);
+  const accAll = (X) => { const n = myMoves(X); return n ? +(Object.entries(X.phaseAcc).reduce((a, [k, x]) => a + x * X.phaseMoves[k], 0) / n).toFixed(1) : null; };
+  const per = (X, k) => { const n = myMoves(X); return n ? +((100 * ((X.errorCounts || {})[k] || 0)) / n).toFixed(1) : null; };
+  const g = (X, f) => { try { const r = X ? f(X) : null; return r === undefined ? null : r; } catch { return null; } };
+  sec("Results");
+  add("Games", g(A, (X) => X.games), g(B, (X) => X.games));
+  add("Score", g(A, (X) => X.scorePct), g(B, (X) => X.scorePct), "hi", (x) => x + "%");
+  add("Won / drawn / lost", g(A, (X) => `${X.wins} / ${X.draws} / ${X.losses}`), g(B, (X) => `${X.wins} / ${X.draws} / ${X.losses}`));
+  add("Rating (from games)", g(A, () => playerElo(me)), g(B, () => playerElo(other)), "hi");
+  sec("Quality of moves");
+  add("Accuracy", g(A, accAll), g(B, accAll), "hi");
+  add("Average centipawn loss", g(A, (X) => X.cpl.all.me.acpl), g(B, (X) => X.cpl.all.me.acpl), "lo", (x) => x, g(A, (X) => [X.cpl.all.me.lo, X.cpl.all.me.hi]), g(B, (X) => [X.cpl.all.me.lo, X.cpl.all.me.hi]));
+  add("Blunders per 100 moves", g(A, (X) => per(X, "blunder")), g(B, (X) => per(X, "blunder")), "lo");
+  add("Mistakes per 100 moves", g(A, (X) => per(X, "mistake")), g(B, (X) => per(X, "mistake")), "lo");
+  add("Winning positions converted", g(A, (X) => (X.conversion.chances ? Math.round((100 * X.conversion.won) / X.conversion.chances) : null)), g(B, (X) => (X.conversion.chances ? Math.round((100 * X.conversion.won) / X.conversion.chances) : null)), "hi", (x) => x + "%");
+  add("Lost positions saved", g(A, (X) => (X.resilience.lost ? Math.round((100 * X.resilience.saved) / X.resilience.lost) : null)), g(B, (X) => (X.resilience.lost ? Math.round((100 * X.resilience.saved) / X.resilience.lost) : null)), "hi", (x) => x + "%");
+  sec("Phases (win-chance points per game, over all games)");
+  for (const k of ["opening", "middlegame", "endgame"]) add(PH_NAME[k], g(A, (X) => X.phases.contrib[k].avg), g(B, (X) => X.phases.contrib[k].avg), "hi", (x) => sgn(x), g(A, (X) => [X.phases.contrib[k].lo, X.phases.contrib[k].hi]), g(B, (X) => [X.phases.contrib[k].lo, X.phases.contrib[k].hi]));
+  for (const k of ["opening", "middlegame", "endgame"]) add(`${PH_NAME[k]}: centipawn loss`, g(A, (X) => X.cpl[k].me.acpl), g(B, (X) => X.cpl[k].me.acpl), "lo", (x) => x, g(A, (X) => [X.cpl[k].me.lo, X.cpl[k].me.hi]), g(B, (X) => [X.cpl[k].me.lo, X.cpl[k].me.hi]));
+  add("Endgame reached", g(A, (X) => X.phases.flow.reachedEnd), g(B, (X) => X.phases.flow.reachedEnd), null, (x) => x + "% of games");
+  sec("Style");
+  add("Calm (0) ↔ sharp (100)", g(A, (X) => X.style.aggression), g(B, (X) => X.style.aggression));
+  add("Checks / captures", g(A, (X) => `${X.style.checksPct}% / ${X.style.capturesPct}%`), g(B, (X) => `${X.style.checksPct}% / ${X.style.capturesPct}%`));
+  add("Sacrifices per 10 games", g(A, (X) => X.style.sacPer10), g(B, (X) => X.style.sacPer10));
+  add("Average game length", g(A, (X) => X.style.avgLength), g(B, (X) => X.style.avgLength), null, (x) => x + " moves");
+  sec("Openings (most played family)");
+  for (const c of ["w", "b"]) { const top = (X) => { const f = X.families.find((f) => f.color === c); return f ? `${f.name} · ${f.games}× · ${f.scorePct}%` : null; };
+    add(c === "w" ? "As White" : "As Black", g(A, top), g(B, top)); }
+  if (TA || TB) {
+    sec("Thinking test");
+    add("Test rating", TA?.overall ?? null, TB?.overall ?? null, "hi");
+    add("Tactical / positional", TA ? `${TA.tactical ?? "–"} / ${TA.positional ?? "–"}` : null, TB ? `${TB.tactical ?? "–"} / ${TB.positional ?? "–"}` : null);
+    add("Player type", TA?.type ?? null, TB?.type ?? null);
+  }
+  const small = (A?.games || 0) < 10 || (B?.games || 0) < 10;
+  const fin = (R) => R && R.every((z) => z != null && isFinite(z));
+  const overlap = (r) => small || ((r.ra || r.rb) && (!fin(r.ra) || !fin(r.rb) || (r.ra[0] <= r.rb[1] && r.rb[0] <= r.ra[1])));
+  const cell = (r, side) => { const x = side === "a" ? r.a : r.b, y = side === "a" ? r.b : r.a;
+    if (x === null || x === undefined) return `<td class="muted">–</td>`;
+    const win = r.better && typeof x === "number" && typeof y === "number" && x !== y && (r.better === "hi" ? x > y : x < y);
+    const R = side === "a" ? r.ra : r.rb;
+    return `<td class="${win ? (overlap(r) ? "cmp-tie" : "cmp-win") : ""}">${esc(String(r.fmt(x)))}${R && R.every((z) => z != null && isFinite(z)) ? ` <span class="rng">${r.fmt(R[0])} to ${r.fmt(R[1])}</span>` : ""}</td>`; };
+  v.innerHTML = `<div class="card"><h2>Who to compare</h2>${pickHtml}</div>
+    <div class="card"><div class="scroll"><table class="cmptable"><tr><th></th><th>${esc(me.name)}</th><th>${esc(other.name)}</th></tr>
+      ${rows.map((r) => (r.sec ? `<tr class="sec"><td colspan="3">${esc(r.sec)}</td></tr>` : `<tr><td>${esc(r.label)}</td>${cell(r, "a")}${cell(r, "b")}</tr>`)).join("")}</table></div>
+      <p class="small muted"><span class="cmp-win">Green</span> = clearly better. <span class="cmp-tie">Light green</span> = better, but the 95% ranges overlap (or one player has fewer than 10 games), so it may be chance. Phases and centipawn loss need games analysed with this version${!A || !B ? "; a player without analysed games shows dashes" : ""}. Ratings from different sites (Lichess vs Chess.com) aren't directly comparable.</p></div>`;
+  bindCompare(v, me);
+}
+function bindCompare(v, me) {
+  $("#cmpWho", v).onchange = (e) => { me.settings.cmpWith = e.target.value; save(); go("compare"); };
+  $("#cmpTc", v).onchange = (e) => { me.settings.cmpTc = e.target.value; save(); go("compare"); };
+  $("#cmpFile", v).onchange = async (e) => { const f = e.target.files[0]; if (!f) return;
+    try { const d = normalise(JSON.parse(await f.text())); if (!d || !Object.keys(d.players).length) throw 0;
+      cmpExtern = { file: f.name, players: d.players }; me.settings.cmpWith = "f:" + Object.keys(d.players)[0]; save(); go("compare"); toast(`Read ${Object.keys(d.players).length} player${Object.keys(d.players).length === 1 ? "" : "s"} from the file`); }
+    catch { toast("That file isn't a Chess Coach backup"); } };
 }
 
 // ------------------------------------------------------------------ BOARD (analysis)
@@ -1104,8 +1256,14 @@ if (!standalone() && /iPhone|iPad|iPod/.test(navigator.userAgent)) $("#installBt
 
 // ------------------------------------------------------------------ boot
 if (!S.current || !S.players[S.current]) S.current = Object.keys(S.players)[0] || null;
+$("#jobCancel").onclick = () => {
+  if (!confirm("Cancel this analysis? Games that are finished are kept; the rest is dropped.")) return;
+  if (running) { running.cancel(); return; }
+  const q = loadQueue(); for (const e of pool) e.terminate(); pool.length = 0; saveQueue(null);
+  jobDone(q ? `Analysis cancelled. ${q.added || 0} game${q.added === 1 ? "" : "s"} finished and kept, ${q.items?.length || 0} not analysed.` : "Analysis cancelled."); if (tab === "games") go("games");
+};
 $("#jobStop").onclick = () => {
-  if (running) { running.stop = true; $("#jobStop").classList.add("hidden"); $("#jobText").textContent = "Pausing: the games being analysed now are finished first…"; return; }
+  if (running) { running.stop = true; $("#jobStop").classList.add("hidden"); $("#jobText").textContent = "Pausing: the games being analysed now are finished first… (Cancel stops at once)"; return; }
   const q = loadQueue(); if (q && q.items?.length) processQueue(q);
 };
 setTimeout(resumeBanner, 800);

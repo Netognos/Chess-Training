@@ -12,17 +12,19 @@ import { lineToCp, winPct } from "./engine.js";
 let EXTRA = null;
 export async function extraBank() { if (!EXTRA) EXTRA = await import("./extrabank.js"); return EXTRA; }
 
-export async function pickExtra(kind, used, target) {
+export async function pickExtra(kind, used, target, avoid = new Set()) {
   const B = await extraBank();
   if (kind === "style") {
-    const pool = B.STYLEPOS.filter((x) => !used.has(x.id));
+    const all = B.STYLEPOS.filter((x) => !used.has(x.id)), unseen = all.filter((x) => !avoid.has(x.id));
+    const pool = unseen.length >= 3 ? unseen : all;
     const openings = used.size % 2 === 0; // alternate openings and middlegames
     const pref = pool.filter((x) => (x.src === "opening") === openings);
     const rich = (pref.length ? pref : pool).filter((x) => x.rich); // prefer positions with an attacking option or 3 different kinds
     const list = rich.length && Math.random() < 0.75 ? rich : pref.length ? pref : pool;
     return list[Math.floor(Math.random() * list.length)];
   }
-  const pool = B.DEEP.filter((x) => !used.has(x.id)).sort((a, b) => Math.abs(a.r - target) - Math.abs(b.r - target)).slice(0, 5);
+  const fresh = B.DEEP.filter((x) => !used.has(x.id)), unseen = fresh.filter((x) => !avoid.has(x.id));
+  const pool = (unseen.length >= 3 ? unseen : fresh).sort((a, b) => Math.abs(a.r - target) - Math.abs(b.r - target)).slice(0, 6);
   return pool[Math.floor(Math.random() * pool.length)];
 }
 

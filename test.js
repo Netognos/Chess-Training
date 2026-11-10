@@ -49,11 +49,12 @@ export const TAC_CATS = ["Attack & mate", "Defence", "Calculation", "Sacrifice",
 const TAC_KEY = { "Attack & mate": "mate", Defence: "defence", Calculation: "calculation", Sacrifice: "sacrifice", "Quiet moves": "quiet", Endgame: "endgame" };
 export const POS_GROUPS = { initiative: "Initiative", prophylaxis: "Prophylaxis & restriction", coordination: "Coordination & development", space: "Space & centre", structure: "Weaknesses & structure", technique: "Trading & technique", kingsafety: "King safety" };
 const MODES = {
-  quick: { name: "Quick test", tac: { "Attack & mate": 1, Defence: 1, Calculation: 2, Sacrifice: 1, "Quiet moves": 1, Endgame: 1 }, pos: { initiative: 1, prophylaxis: 1, coordination: 1, space: 1, technique: 1 }, style: 2, deep: 1 },
-  full: { name: "Full test", tac: Object.fromEntries(TAC_CATS.map((c) => [c, 3])), pos: Object.fromEntries(Object.keys(POS_GROUPS).map((g) => [g, 2])), style: 5, deep: 2 },
+  quick: { name: "Quick test", tac: { "Attack & mate": 2, Defence: 2, Calculation: 2, Sacrifice: 1, "Quiet moves": 2, Endgame: 1 }, pos: { initiative: 1, prophylaxis: 1, coordination: 1, space: 1, technique: 1 }, style: 2, deep: 1 },
+  full: { name: "Full test", tac: Object.fromEntries(TAC_CATS.map((c) => [c, 4])), pos: Object.fromEntries(Object.keys(POS_GROUPS).map((g) => [g, 2])), style: 5, deep: 2 },
   style: { name: "Style test", tac: {}, pos: {}, style: 10, deep: 0, noQ: true },
   deep: { name: "Deep calculation test", tac: {}, pos: {}, style: 0, deep: 5, noQ: true },
 };
+const modeSize = (m) => { const M = MODES[m]; const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0); return sum(M.tac) + sum(M.pos) + (M.style || 0) + (M.deep || 0); };
 export const EXTRA_CATS = { style: "Style positions", "Deep calculation": "Deep calculation" };
 const catLabel = (c) => POS_GROUPS[c] || EXTRA_CATS[c] || c;
 const expected = (rItem, rPlayer) => 1 / (1 + Math.pow(10, (rItem - rPlayer) / 400));
@@ -95,7 +96,7 @@ export async function testView(v, C) {
       <li><b>Deep calculation</b>: long lines where every move, yours and your opponent's, is the only good move. How far can you see?</li>
       <li>At the end, 8 short questions about how you like to play. Together with your games, they give your <b>player type</b>.</li></ul>
       <p class="small muted">Tip: play it like a game. Think, write down your reasoning and the line you calculated, then move. The category stays hidden until you've answered.</p>
-      <div class="row"><button class="btn" data-mode="quick">Quick test (15 positions, ~25 min)</button><button class="btn secondary" data-mode="full">Full test (39 positions, ~65 min)</button></div>
+      <div class="row"><button class="btn" data-mode="quick">Quick test (${modeSize("quick")} positions, ~${Math.round(modeSize("quick") * 1.7 / 5) * 5} min)</button><button class="btn secondary" data-mode="full">Full test (${modeSize("full")} positions, ~${Math.round(modeSize("full") * 1.7 / 5) * 5} min)</button></div>
       <div class="row" style="margin-top:8px"><button class="btn secondary" data-mode="style">Style test (10 positions, ~10 min)</button><button class="btn secondary" data-mode="deep">Deep calculation (5 long lines, ~25 min)</button></div>
       </div>
       ${p.tests.some((t) => t.done) ? `<div class="card"><h2>Your tests</h2><div class="scroll"><table><tr><th>Date</th><th>Test</th><th>Positions</th><th>Test rating</th><th></th></tr>
@@ -158,16 +159,28 @@ async function startTest(p, mode, C) {
   C.save(); C.logEvent("test", `${M.name} started (start rating ${elo})`);
 }
 
+// ids of positions shown in earlier tests (and earlier practice), so a new test brings new positions
+function seenBefore(p, cur) { return new Set((p?.tests || []).filter((t) => t !== cur).flatMap((t) => (t.items || []).map((i) => i.id)).concat(p?.seenPos || [])); }
 // the position that was on screen when the page was reloaded (so a reload doesn't draw a new one)
 async function findItem(kind, id) { const B = await bank(); return (kind === "tac" ? B.TACTICAL : B.POSITIONAL).find((x) => x.id === id) || null; }
 async function findExtra(kind, id) { const B = await extraBank(); return (kind === "style" ? B.STYLEPOS : B.DEEP).find((x) => x.id === id) || null; }
+// Random pick inside a rating window around the current estimate, never one already used in this test and,
+// while there are others, none seen in an earlier test. The window keeps the level measurement sharp; the
+// randomness inside it means two tests (or two players) rarely get the same positions.
+export function pickFrom(pool, used, avoid, target, win = 150) {
+  const fresh = pool.filter((x) => !used.has(x.id));
+  const unseen = fresh.filter((x) => !avoid.has(x.id));
+  const base = unseen.length >= 3 ? unseen : fresh;
+  let cands = base.filter((x) => Math.abs(x.r - target) <= win);
+  if (cands.length < 4) cands = base.slice().sort((a, b) => Math.abs(a.r - target) - Math.abs(b.r - target)).slice(0, 8);
+  return cands[Math.floor(Math.random() * cands.length)];
+}
 async function pickItem(cur, slot) {
   const B = await bank();
   const used = new Set(cur.items.map((i) => i.id));
-  const target = (cur.est[slot.cat] ?? cur.est.overall) + (slot.kind === "pos" ? -150 : 0) + (Math.random() * 160 - 80);
-  const pool = slot.kind === "tac" ? B.TACTICAL.filter((x) => x.c === TAC_KEY[slot.cat]) : B.POSITIONAL.filter((x) => x.g.includes(slot.cat));
-  const cands = pool.filter((x) => !used.has(x.id)).sort((a, b) => Math.abs(a.r - target) - Math.abs(b.r - target)).slice(0, 6);
-  return cands[Math.floor(Math.random() * cands.length)];
+  const target = (cur.est[slot.cat] ?? cur.est.overall) + (slot.kind === "pos" ? -150 : 0) + (Math.random() * 120 - 60);
+  const pool = slot.kind === "tac" ? B.TACTICAL.filter((x) => x.c === TAC_KEY[slot.cat] || (x.t || []).includes(TAC_KEY[slot.cat])) : B.POSITIONAL.filter((x) => x.g.includes(slot.cat));
+  return pickFrom(pool, used, cur.avoid || new Set(), target);
 }
 
 // ---- reading a written line ("Txf7 Kxf7 Dh5+" / "1.Rxf7 Kxf7 2.Qh5+" / UCI), Dutch or English piece letters
@@ -240,7 +253,7 @@ async function runItem(v0, cur, C, opts) {
     const used = new Set((opts.used || cur.items).map((i) => i.id));
     const target = (est?.["Deep calculation"] ?? est?.overall ?? 1800) + (Math.random() * 160 - 80);
     const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
-    const it = (pend && (await findExtra(slot.kind, pend))) || (await pickExtra(slot.kind, used, target));
+    const it = (pend && (await findExtra(slot.kind, pend))) || (await pickExtra(slot.kind, used, target, seenBefore(C.P(), cur)));
     if (it && opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
     if (!it) { v.innerHTML = `<div class="card"><p>No more positions of this kind.</p></div>`; return; }
     window.__ccItem = it;
@@ -258,7 +271,7 @@ async function runItem(v0, cur, C, opts) {
     return (slot.kind === "style" ? runStyle : runDeep)(v, C, { it, title, onRecord, nextLabel, onNext });
   }
   const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
-  const it = (pend && (await findItem(slot.kind, pend))) || (await pickItem({ items: opts.used || cur.items, est }, slot));
+  const it = (pend && (await findItem(slot.kind, pend))) || (await pickItem({ items: opts.used || cur.items, est, avoid: seenBefore(C.P(), cur) }, slot));
   if (!it) { v.innerHTML = `<div class="card"><p>No more positions in this category.</p></div>`; return; }
   if (opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
   window.__ccItem = it;
@@ -654,4 +667,12 @@ export function currentStyle(p, C) {
   const R = t ? computeResult(p, t, A) : null;
   const type = R ? R.type : guessTypeFromGames(A);
   return { type, typeName: PLAYER_TYPES[type].name, aggression: R ? R.aggression : A?.style?.aggression ?? null, fromTest: !!R, A };
+}
+
+// Compact test profile for the compare page: test rating, tactical/positional, player type, per-category ratings
+export function testSummary(p, A) {
+  const t = profileTest(p); if (!t) return null;
+  const R = computeResult(p, t, A);
+  return { overall: R.overall, tactical: R.tactical, positional: R.positional, type: PLAYER_TYPES[R.type]?.name || R.type, aggression: R.aggression,
+    cats: Object.fromEntries(Object.entries(R.cats).map(([c, x]) => [catLabel(c), x.rating])) };
 }

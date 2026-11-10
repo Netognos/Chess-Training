@@ -6,20 +6,31 @@ const PH = { opening: "Openings", middlegame: "Middlegame", endgame: "Endgames" 
 export function diagnose(A, player = {}) {
   const strengths = [], weaknesses = [];
   const phases = Object.keys(A.phaseMoves || {}).filter((p) => A.phaseMoves[p] >= 20);
-  const F = A.phases;
-  if (F && F.weakest && F.phase[F.weakest].avg < 0 && F.games >= 5) {
-    // the same verdict as the "Phases and transitions" card: where win chance is lost, with the error rate as extra evidence
-    const w = F.weakest, b = F.strongest;
-    weaknesses.push({ key: "phase-" + w, area: PH[w], title: `Weakest phase: ${w}`,
-      evidence: `You lose on average ${Math.abs(F.phase[w].avg)}% win chance in the ${w}${A.seriousPer100?.[w] != null ? `, with ${A.seriousPer100[w]} mistakes+blunders per 100 moves (accuracy ${A.phaseAcc[w]}%)` : ""}.` });
-    if (b && b !== w) strengths.push({ title: `Strongest phase: ${b}`, evidence: `${F.phase[b].avg >= 0 ? "+" : ""}${F.phase[b].avg}% win chance per game in the ${b}${A.phaseAcc?.[b] != null ? `, accuracy ${A.phaseAcc[b]}%` : ""}.` });
+  const F = A.phases, C = A.cpl;
+  // Opponent comparison for one phase: your centipawn loss and serious errors against theirs, in the same games.
+  const vsOpp = (w) => { const m = C?.[w]?.me, o = C?.[w]?.opp; if (!m || !o) return "";
+    return ` Your average centipawn loss there is ${m.acpl} against ${o.acpl} for your opponents, with ${m.per100} vs ${o.per100} mistakes+blunders per 100 moves.`; };
+  if (F) {
+   if (F.weakest) {
+    // Same verdict as the "Phases" card. Win chance is zero-sum, so this is "you vs your opponents in this
+    // phase", not "how many errors happen here" (the middlegame has the most errors for everyone).
+    const w = F.weakest, c = F.contrib[w], b = F.strongest;
+    if (F.verdict !== "relative")
+      weaknesses.push({ key: "phase-" + w, area: PH[w], title: `Weakest phase: ${w}`,
+        evidence: `Over all ${F.games} games you lose ${Math.abs(c.avg)} points of win chance per game in the ${w} (${c.lo !== null ? `95% range ${c.lo} to ${c.hi}` : "too few games for a range"}${F.verdict === "likely" ? ", so not certain yet" : ""}).${vsOpp(w)}` });
+    if (b && F.contrib[b].avg > 0) strengths.push({ title: `Strongest phase: ${b}`, evidence: `+${F.contrib[b].avg} points of win chance per game in the ${b}.${vsOpp(b)}` });
+    if (F.verdict === "relative") strengths.push({ title: "No phase where you lose on balance", evidence: `Your smallest edge is in the ${w} (${c.avg >= 0 ? "+" : ""}${c.avg} per game). That's where there is the least to gain from, not a weakness.` });
+   } // fewer than 3 games per phase: no phase verdict yet (the Phases card says the same)
+  } else if (C && C.games >= 5) {
+    const ds = ["opening", "middlegame", "endgame"].filter((k) => C[k]?.me && C[k]?.opp && C[k].me.moves >= 20).map((k) => [k, C[k].me.acpl - C[k].opp.acpl]).sort((x, y) => y[1] - x[1]);
+    if (ds.length && ds[0][1] >= 10) weaknesses.push({ key: "phase-" + ds[0][0], area: PH[ds[0][0]], title: `Weakest phase: ${ds[0][0]}`, evidence: `You lose ${ds[0][1]} centipawns per move more than your opponents there.${vsOpp(ds[0][0])}` });
   } else if (phases.length) {
+    // no phase data yet (older analysis): only report where most errors fall, with the caveat
     const byErr = [...phases].sort((a, b) => A.seriousPer100[b] - A.seriousPer100[a] || A.phaseAcc[a] - A.phaseAcc[b]);
     const worst = byErr[0], best = byErr[byErr.length - 1];
     if (A.seriousPer100[worst] > 0 && worst !== best)
-      weaknesses.push({ key: "phase-" + worst, area: PH[worst], title: `Weakest phase: ${worst}`,
-        evidence: `${A.seriousPer100[worst]} mistakes+blunders per 100 moves (accuracy ${A.phaseAcc[worst]}%), vs ${A.seriousPer100[best]} in the ${best}.` });
-    strengths.push({ title: `Strongest phase: ${best}`, evidence: `Accuracy ${A.phaseAcc[best]}%, ${A.seriousPer100[best]} mistakes+blunders per 100 moves.` });
+      weaknesses.push({ key: "phase-" + worst, area: PH[worst], title: `Most errors: ${worst}`,
+        evidence: `${A.seriousPer100[worst]} mistakes+blunders per 100 moves (accuracy ${A.phaseAcc[worst]}%), vs ${A.seriousPer100[best]} in the ${best}. That alone doesn't make it your weak phase: everyone errs most in the middlegame. Re-analyse your games to compare with your opponents.` });
   }
   const totalSerious = Object.values(A.tags || {}).reduce((a, b) => a + b, 0) || 1;
   Object.entries(A.tags || {}).filter(([t, n]) => n >= 2 && TAG_ADVICE[t]).slice(0, 3).forEach(([t, n]) => {
@@ -36,11 +47,11 @@ export function diagnose(A, player = {}) {
     else if (rate >= 80) strengths.push({ title: "Good technique when winning", evidence: `Won ${c.won} of ${c.chances} games where you had a winning position.` });
   }
   if (r.lost >= 3 && r.saved / r.lost >= 0.3) strengths.push({ title: "Fighting spirit", evidence: `You saved ${r.saved} of ${r.lost} lost positions.` });
-  for (const o of A.openings || []) {
-    if (o.games < 3 || o.wpAfter10 === null) continue;
+  for (const o of A.families || A.openings || []) {
+    if (o.games < 3 || o.wpAfter10 === null || /no name in the PGN/.test(o.name)) continue;
     const side = o.color === "w" ? "White" : "Black";
-    if (o.wpAfter10 >= 55) strengths.push({ title: `Opening: ${o.name} (${side})`, evidence: `${o.games} games: win chance after move 10 averages ${o.wpAfter10}%, score ${o.scorePct}%.` });
-    else if (o.wpAfter10 <= 40) weaknesses.push({ key: "op-" + o.name, area: "Openings", title: `Opening problems: ${o.name} (${side})`, evidence: `${o.games} games: after move 10 your win chance is only ${o.wpAfter10}% on average. Review the main line and its typical plans, or switch.` });
+    if (o.wpAfter10 >= 55) strengths.push({ title: `Opening: ${o.name} (${side})`, evidence: `${o.games} games: win chance after the opening averages ${o.wpAfter10}%, score ${o.scorePct}%.` });
+    else if (o.wpAfter10 <= 40) weaknesses.push({ key: "op-" + o.name, area: "Openings", title: `Opening problems: ${o.name} (${side})`, evidence: `${o.games} games: after the opening your win chance is only ${o.wpAfter10}% on average. Review the main line and its typical plans, or switch.` });
   }
   for (const [t, e] of Object.entries(A.endgames || {})) if (e.games >= 3 && e.scorePct < 35)
     weaknesses.push({ key: "eg-" + t, area: "Endgames", title: `Weak in ${t}s`, evidence: `${e.games} games reached a ${t}, and you scored ${e.scorePct}%.`, drills: TAG_ADVICE["endgame technique"].drills, links: TAG_ADVICE["endgame technique"].links });
