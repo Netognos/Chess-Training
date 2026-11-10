@@ -1,7 +1,7 @@
 import { Chess } from "./vendor/chess.js";
 import { Engine, lineToCp, winPct, fmtScore } from "./engine.js";
 import { Board } from "./board.js";
-import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc } from "./analysis.js";
+import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
@@ -538,14 +538,13 @@ function report(v) {
     <li><b>Analysis depth</b>: ${A.depth ? `Stockfish 19 (lite) looked on average <b>${A.depth} half-moves</b> deep per position` : "unknown for older games"}${A.serverAnalysed ? `; ${A.serverAnalysed} games reused the Lichess server analysis` : ""}. Depth 14-16 reliably finds mistakes and blunders at club level, and depth 18+ is roughly what Lichess uses for a quick server analysis.</li>
   </ul></details></div>
   ${phasesHtml(A.phases, A.games, C)}
+  ${errMatrixHtml(A)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
      ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}</div>
   <div class="card"><h2>Training plan: ${p.hours} h per week</h2>
     <p class="small muted">Based on GM Kuljasevic's study split (tactics 25 · endgames 25 · middlegame 20 · general 20 · openings 10), shifted toward your weak points. Change your hours per week under Home → Profile.</p>
     ${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week${D.plan.split[w.what] !== undefined ? ` (${D.plan.split[w.what]}%)` : ""}${w.weak ? ' <span class="pill mistake">focus</span>' : ""}</b><span class="small">${esc(w.how)}</span></div>`).join("")}</div>
-  <div class="card"><h2>What kind of errors?</h2><p class="small muted">Mistakes and blunders by type (one error can have several tags).</p>
-    <table>${Object.entries(A.tags).map(([t, n]) => `<tr><td>${esc(t)}</td><td>${n}</td><td class="small muted">${esc(TAG_ADVICE[t]?.why || "")}</td></tr>`).join("") || "<tr><td>None</td></tr>"}</table></div>
   <div class="card"><h2>Openings</h2><p class="small muted" style="margin-top:-6px">Grouped by opening family. Tap a family to see the variations you actually played.</p>${familyTableHtml(A.families, esc, { tid: "rep" })}
     <p class="small muted">Win chance after the opening below 45%? Then the opening isn't working for you. A low score while the win chance is fine means the problem comes later in the game.</p></div>
   <div class="card"><h2>Repertoire</h2>${repertoireHtml(p, A)}</div>
@@ -556,6 +555,7 @@ function report(v) {
   <div class="card"><h2>Next</h2><div class="row"><button class="btn" id="toTrain">Start training</button><button class="btn secondary" id="toProfile">Your style & player profile</button></div></div>
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
   bindRepertoire(v, p); bindFamilyTable(v);
+  v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
   v.querySelectorAll("[data-rtc]").forEach((b) => (b.onclick = () => { const c = b.dataset.rtc;
     p.settings.repTc = !c ? [] : sel.includes(c) ? sel.filter((x) => x !== c) : [...sel, c]; save(); go("report"); }));
   $("#copyRep").onclick = () => copy(claudeSummary(p, A, D));
@@ -593,7 +593,8 @@ function claudeSummary(p, A, D) {
     (A.cpl ? `Centipawn loss me vs opponents: ${["opening", "middlegame", "endgame", "all"].filter((k) => A.cpl[k]?.me).map((k) => `${k} ${A.cpl[k].me.acpl} vs ${A.cpl[k].opp?.acpl ?? "?"}`).join(", ")}.\n` : "") +
     (A.families?.length ? `Opening families: ${A.families.slice(0, 6).map((f) => `${f.color === "w" ? "W" : "B"} ${f.name} (${f.games}x, +${f.wins}=${f.draws}-${f.losses}, ${f.scorePct}%)`).join("; ")}.\n` : "") +
     `Analysed games: ${A.games}, score ${A.scorePct}%.\nAccuracy per phase: ${Object.entries(A.phaseAcc).map(([k, x]) => `${k} ${x} (${A.seriousPer100[k]} errors/100 moves)`).join(", ")}.\n` +
-    `Error types: ${Object.entries(A.tags).map(([k, n]) => `${k}: ${n}`).join("; ")}.\nWinning positions converted: ${A.conversion.won}/${A.conversion.chances}; lost positions saved: ${A.resilience.saved}/${A.resilience.lost}.\n` +
+    `Error types: ${Object.entries(A.tags).map(([k, n]) => `${k}: ${n}`).join("; ")}.\n` +
+    (A.errMatrix ? `Errors by phase and cause (count, win-chance lost per game): ${["opening", "middlegame", "endgame"].map((ph) => `${ph}: ${Object.entries(A.errMatrix[ph]).filter(([, x]) => x.n).map(([c, x]) => `${c} ${x.n} (−${x.perGame})`).join(", ") || "none"}`).join("; ")}.\n` : "") + `Winning positions converted: ${A.conversion.won}/${A.conversion.chances}; lost positions saved: ${A.resilience.saved}/${A.resilience.lost}.\n` +
     `Openings: ${A.openings.slice(0, 6).map((o) => `${o.color === "w" ? "W" : "B"} ${o.name} (${o.games}x, ${o.scorePct}%, win chance after move 10 ${o.wpAfter10 ?? "?"}${o.wpAfter10 != null ? "%" : ""})`).join("; ")}.\n` +
     `Repertoire: White ${p.repertoire.white || "?"}, vs e4 ${p.repertoire.vsE4 || "?"}, vs d4 ${p.repertoire.vsD4 || "?"}.\n` +
     `Strengths: ${D.strengths.map((s) => s.title).join("; ")}.\nWeak points: ${D.weaknesses.map((w) => w.title).join("; ")}.\n` +
@@ -910,6 +911,32 @@ function phasesHtml(F, total, C) {
       <li><b>Why this, and not the number of blunders?</b> Win chance is shared: what you lose, your opponent gains. So a phase where you lose points is a phase where your opponents outplay you. The middlegame has the most blunders for every player because it is the longest and hardest phase; that alone isn't a weakness.</li>
       <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, at the moment the phase changes.</li>
       <li><b>95% range</b>: if you played many more games like these, the true average would lie in this range 95% of the time. With fewer than 10 games it is shown with a "few games" label.</li></ul></details></div>`;
+}
+function errMatrixHtml(A) {
+  const M = A.errMatrix; if (!M) return "";
+  const causes = Object.keys(ERR_CAUSES), phs = ["opening", "middlegame", "endgame"];
+  const all = phs.flatMap((ph) => causes.map((c) => M[ph][c]));
+  const tot = all.reduce((a, x) => a + x.n, 0);
+  if (!tot) return `<div class="card"><h2>What went wrong</h2><p class="muted">No mistakes or blunders in these games.</p></div>`;
+  const max = Math.max(...all.map((x) => x.perGame));
+  const colTot = (c) => phs.reduce((a, ph) => a + M[ph][c].n, 0), colLost = (c) => +phs.reduce((a, ph) => a + M[ph][c].perGame, 0).toFixed(1);
+  const cell = (x) => (x.n ? `<td class="${x.perGame === max ? "errmax" : ""}"><b>${x.n}</b>${x.blunders ? ` <span class="muted small">(${x.blunders} bl.)</span>` : ""}<div class="small">−${x.perGame}/game</div></td>` : `<td class="muted">–</td>`);
+  const ex = phs.flatMap((ph) => causes.flatMap((c) => M[ph][c].ex.map((e) => ({ ...e, ph, c })))).sort((a, b) => b.drop - a.drop).slice(0, 8);
+  return `<div class="card"><h2>What went wrong</h2>
+    <p class="small muted" style="margin-top:-6px">All ${tot} mistakes and blunders, by phase and by cause. This is shown even for phases you win on balance: your opponents erring more doesn't make your own errors free. "−x/game" = points of win chance these errors cost per game.</p>
+    <div class="scroll"><table class="errtable"><tr><th>Phase</th>${causes.map((c) => `<th>${ERR_CAUSES[c]}</th>`).join("")}</tr>
+      ${phs.map((ph) => `<tr><td>${PH_NAME[ph]}</td>${causes.map((c) => cell(M[ph][c])).join("")}</tr>`).join("")}
+      <tr class="tot"><td>Total</td>${causes.map((c) => (colTot(c) ? `<td>${np(colTot(c), tot)}<div class="small">−${colLost(c)}/game</div></td>` : `<td class="muted">–</td>`)).join("")}</tr></table></div>
+    <h3>Your costliest errors</h3>
+    ${ex.map((e) => `<div class="list-item weak errrow"><div><b>Move ${e.moveNo}: ${esc(e.played)}</b>${e.best ? ` <span class="muted">best was</span> <b>${esc(e.best)}</b>` : ""} <span class="pill ${e.label}">${e.label} −${Math.round(e.drop)}%</span>
+      <div class="small muted">${PH_NAME[e.ph]} · ${ERR_CAUSES[e.c]}${e.opening ? ` · ${esc(e.opening)}` : ""}${e.game && /^https?:/.test(e.game) ? ` · <a href="${esc(e.game)}" target="_blank" rel="noopener">game</a>` : ""}</div></div>
+      <button class="btn secondary small" data-errfen="${esc(e.fen)}">Open on board</button></div>`).join("")}
+    <details class="small" style="margin-top:8px"><summary><b>How is the cause decided?</b></summary><ul>
+      <li><b>Time trouble</b>: you had less than 10% of your starting time (or under 30 s) left when you made the move. Comes first: under the clock, the cause is the clock.</li>
+      <li><b>Tactical</b>: the engine's best move was a check, capture or promotion you didn't play, you missed a mate, or your move let the opponent win material or mate.</li>
+      <li><b>Endgame technique</b>: an error in the endgame that isn't tactical.</li>
+      <li><b>Positional / planning</b>: everything else: a wrong plan, a bad piece placement or pawn move, a wrong exchange.</li></ul>
+      <p>All tags (one error can have several): ${Object.entries(A.tags).map(([t, n]) => `${esc(t)} ${n}`).join(" · ") || "none"}.</p></details></div>`;
 }
 const PH_TIP = { opening: "Look at your openings (Openings → My repertoire) and the first critical decisions after theory.", middlegame: "Calculation, plans and tactics: puzzles from your games and the thinking test target exactly this.", endgame: "Technique and theory: train the endgames for your level (Train → Endgames)." };
 

@@ -329,6 +329,7 @@ export function aggregate(games) {
   A.seriousPer100 = {}; for (const p of Object.keys(cnt)) A.seriousPer100[p] = +(100 * serious.filter((e) => e.phase === p).length / cnt[p]).toFixed(1);
   A.tags = {}; for (const e of serious) for (const t of e.tags || []) A.tags[t] = (A.tags[t] || 0) + 1;
   A.tags = Object.fromEntries(Object.entries(A.tags).sort((a, b) => b[1] - a[1]));
+  A.errMatrix = errorMatrix(serious, games.length);
   const op = {}; for (const g of games) (op[`${g.color}|${g.opening}`] ||= []).push(g);
   A.openings = Object.entries(op).map(([k, v]) => {
     const [color, name] = k.split("|"); const wp = v.map((x) => x.wpAfterOpening).filter((x) => x !== null);
@@ -376,6 +377,31 @@ export function aggregate(games) {
   // openings faced: per colour, worst results (min 2 games)
   A.hardest = A.openings.filter((o) => o.games >= 2).sort((a, b) => a.scorePct - b.scorePct || (a.wpAfter10 ?? 50) - (b.wpAfter10 ?? 50)).slice(0, 5);
   return A;
+}
+
+// ---------------------------------------------------------------- what went wrong: cause × phase
+// One main cause per mistake/blunder, in this order: clock (under 10% of the base time or 30 s), a tactic
+// (a missed check/capture/mate, or a piece or mate allowed), endgame technique, otherwise positional/planning.
+export const ERR_CAUSES = { time: "Time trouble", tactical: "Tactical", technique: "Endgame technique", positional: "Positional / planning" };
+export function errorCause(e) {
+  const t = e.tags || [];
+  if (t.includes("time trouble")) return "time";
+  if (t.some((x) => /tactic|mate|hung/.test(x))) return "tactical";
+  if (e.phase === "endgame" || t.includes("endgame technique")) return "technique";
+  return "positional";
+}
+export function errorMatrix(serious, nGames) {
+  const M = {};
+  for (const ph of ["opening", "middlegame", "endgame"]) M[ph] = Object.fromEntries(Object.keys(ERR_CAUSES).map((c) => [c, { n: 0, blunders: 0, lost: 0, ex: [] }]));
+  for (const e of serious) {
+    const c = M[e.phase]?.[errorCause(e)]; if (!c) continue;
+    c.n++; if (e.label === "blunder") c.blunders++; c.lost += e.drop || 0; c.ex.push(e);
+  }
+  for (const ph of Object.keys(M)) for (const c of Object.values(M[ph])) {
+    c.perGame = nGames ? +(c.lost / nGames).toFixed(1) : 0; c.lost = +c.lost.toFixed(1);
+    c.ex = c.ex.sort((a, b) => b.drop - a.drop).slice(0, 3).map((e) => ({ moveNo: e.moveNo, color: e.color, played: e.played, best: e.best, drop: e.drop, label: e.label, fen: e.fen, game: e.game, opening: e.opening, tags: e.tags }));
+  }
+  return M;
 }
 
 // ---------------------------------------------------------------- opening families

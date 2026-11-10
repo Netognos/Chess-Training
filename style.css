@@ -304,3 +304,10 @@ a { color: var(--link); }
 .cmptable tr.sec td { font-weight: 700; padding-top: 14px; border-bottom: 2px solid var(--line); }
 .cmp-win { background: color-mix(in srgb, var(--good) 22%, transparent); font-weight: 650; }
 .cmp-tie { background: color-mix(in srgb, var(--good) 11%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--good) 55%, transparent); }
+.errtable td { vertical-align: top; }
+.errtable td.errmax { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.errtable tr.tot td { border-top: 2px solid var(--line); }
+.errrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-direction: row !important; }
+@media (max-width: 640px) { .errrow { flex-direction: column !important; align-items: flex-start; } }
+.errrow b { display: inline; }
+.errrow .pill { margin-left: 6px; }

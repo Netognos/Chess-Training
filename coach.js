@@ -1,5 +1,6 @@
 // Turns the analysis profile into a coaching diagnosis + training plan.
 import { BASE_SPLIT, TAG_ADVICE } from "./data.js";
+import { errorCause } from "./analysis.js";
 
 const PH = { opening: "Openings", middlegame: "Middlegame", endgame: "Endgames" };
 
@@ -32,8 +33,24 @@ export function diagnose(A, player = {}) {
       weaknesses.push({ key: "phase-" + worst, area: PH[worst], title: `Most errors: ${worst}`,
         evidence: `${A.seriousPer100[worst]} mistakes+blunders per 100 moves (accuracy ${A.phaseAcc[worst]}%), vs ${A.seriousPer100[best]} in the ${best}. That alone doesn't make it your weak phase: everyone errs most in the middlegame. Re-analyse your games to compare with your opponents.` });
   }
+  // What exactly goes wrong, per phase and cause. Shown even when the phase is positive overall: winning the
+  // middlegame on balance doesn't make the tactics you miss there harmless.
+  const M = A.errMatrix;
+  if (M && A.games >= 3) {
+    const CAUSE = { time: "Time trouble", tactical: "Tactical errors", technique: "Endgame technique", positional: "Positional errors" };
+    const cells = Object.entries(M).flatMap(([ph, cs]) => Object.entries(cs).map(([c, x]) => ({ ph, c, ...x }))).filter((x) => x.n >= 2).sort((a, b) => b.perGame - a.perGame);
+    for (const x of cells.slice(0, 2)) {
+      const net = F?.contrib?.[x.ph]?.avg;
+      const e = x.ex[0];
+      const ctx = net != null && net >= 0 ? ` Even though you come out ahead in the ${x.ph} overall (${net >= 0 ? "+" : ""}${net}), these errors cost you points you could have kept.` : "";
+      weaknesses.push({ key: `err-${x.ph}-${x.c}`, area: x.c === "tactical" ? "Tactics" : x.c === "technique" ? "Endgames" : x.c === "positional" ? (x.ph === "opening" ? "Openings" : "Middlegame") : "General (calculation, own games, thinking)",
+        title: `${CAUSE[x.c]} in the ${x.ph}`,
+        evidence: `${x.n} mistakes and blunders (${x.blunders} blunders), costing ${x.perGame} points of win chance per game.${ctx}${e ? ` Biggest: move ${e.moveNo} ${e.played}${e.best ? ` instead of ${e.best}` : ""} (−${Math.round(e.drop)}%).` : ""}`,
+        drills: (TAG_ADVICE[{ time: "time trouble", tactical: "missed tactic / forcing move", technique: "endgame technique", positional: "positional / planning" }[x.c]] || {}).drills });
+    }
+  }
   const totalSerious = Object.values(A.tags || {}).reduce((a, b) => a + b, 0) || 1;
-  Object.entries(A.tags || {}).filter(([t, n]) => n >= 2 && TAG_ADVICE[t]).slice(0, 3).forEach(([t, n]) => {
+  Object.entries(A.tags || {}).filter(([t, n]) => n >= 2 && TAG_ADVICE[t] && !weaknesses.some((w) => w.key.startsWith("err-") && w.key.endsWith("-" + errorCause({ tags: [t], phase: t === "endgame technique" ? "endgame" : "" })))).slice(0, 2).forEach(([t, n]) => {
     const adv = TAG_ADVICE[t];
     weaknesses.push({ key: "tag-" + t, area: adv.area, title: cap(t), evidence: `${n} of your serious errors (${Math.round(100 * n / totalSerious)}%). ${adv.why}`, drills: adv.drills, links: adv.links });
   });
