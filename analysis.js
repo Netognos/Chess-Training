@@ -499,6 +499,9 @@ export function phaseFlow(games) {
     const m = withEnd.filter((g) => bucket(g.ph.cEnd) === b);
     T.middlegame[b] = outcome(m);
     const oe = o.filter((g) => g.ph.wEnd !== null);
+    const cnt = (list, f) => list.filter(f).length;
+    (T.paths ||= {})[b] = { n: o.length, end: { better: cnt(oe, (g) => bucket(g.ph.cEnd) === "better"), equal: cnt(oe, (g) => bucket(g.ph.cEnd) === "equal"), worse: cnt(oe, (g) => bucket(g.ph.cEnd) === "worse"), none: o.length - oe.length },
+      res: { win: cnt(o, (g) => g.ph.res === 100), draw: cnt(o, (g) => g.ph.res === 50), loss: cnt(o, (g) => g.ph.res === 0) }, score: o.length ? Math.round(o.reduce((a, g) => a + g.ph.res, 0) / o.length) : null };
     T.openToMid[b] = oe.length ? { n: oe.length, better: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "better").length) / oe.length), equal: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "equal").length) / oe.length), worse: Math.round((100 * oe.filter((g) => bucket(g.ph.cEnd) === "worse").length) / oe.length) } : null;
   }
   // Contribution of each phase averaged over ALL games (a game that never reaches a phase adds 0 there),

@@ -915,14 +915,17 @@ function phasesHtml(F, total, C) {
     ${C ? `<div class="scroll"><table class="acctable"><tr><th>Phase</th><th>Your CPL</th><th>Opponents' CPL</th><th>Your accuracy</th><th>Opponents'</th><th>Your mistakes + blunders</th><th>Opponents'</th></tr>${["opening", "middlegame", "endgame", "all"].map(accRow).join("")}</table></div>
       <p class="small muted">CPL = average centipawn loss per move (lower is better). The small range is the 95% interval: with few games it is wide, and two numbers whose ranges overlap aren't really different. Everyone makes the most errors in the middlegame, so compare yourself with your opponents in the same phase, not one phase with another.${C.games < n ? ` Based on ${C.games} game${C.games === 1 ? "" : "s"}: re-analyse the others to include them.` : ""}</p>`
       : `<p class="small muted">Re-analyse your games to compare your centipawn loss and errors with your opponents', phase by phase.</p>`}
-    <h3>After the opening → final result</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.opening[k])).join("")}</table></div>
-    <h3>After the opening → entering the endgame</h3><div class="scroll"><table><tr><th>After the opening</th><th>Games</th><th>Still better</th><th>Equal</th><th>Worse</th></tr>${["better", "equal", "worse"].map((k) => tm[k] ? `<tr><td>${L[k]}</td><td>${tm[k].n}</td><td>${np(cnt(tm[k], "better"), tm[k].n)}</td><td>${np(cnt(tm[k], "equal"), tm[k].n)}</td><td>${np(cnt(tm[k], "worse"), tm[k].n)}</td></tr>` : `<tr><td>${L[k]}</td><td>0</td><td colspan="3" class="muted">no games reached an endgame</td></tr>`).join("")}</table></div>
-    <h3>Entering the endgame → final result</h3><div class="scroll"><table><tr><th>Entering the endgame</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.middlegame[k])).join("")}</table></div>
+    <h3>From the opening to the result</h3>
+    <p class="small muted">Each row is a group of games, sorted by how you stood the moment the opening ended (Stockfish: <b>better</b> = at least a pawn up, <b>equal</b> = between a pawn down and a pawn up, <b>worse</b> = at least a pawn down). Follow the row to the right to see how those same games stood when the endgame began, and how they ended.</p>
+    ${pathTable(F, n)}
+    <h3>Entering the endgame → result</h3>
+    <p class="small muted">Only the games that reached an endgame, grouped by how you stood when it began.</p>
+    <div class="scroll"><table><tr><th>Entering the endgame</th><th>Games</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${["better", "equal", "worse"].map((k) => outRow(L[k], F.T.middlegame[k])).join("")}</table></div>
     <details class="small" style="margin-top:8px"><summary><b>How is this worked out?</b></summary><ul>
       <li><b>Phases</b> follow the Lichess rules (its "Divider"): the middlegame starts at the first position with at most 10 pieces other than kings and pawns, or with fewer than 4 pieces left on a player's back rank, or where white and black pieces are clearly mixed. The endgame starts when at most 6 pieces other than kings and pawns are left. Chess.com doesn't publish its rules.</li>
       <li><b>Win chance</b> uses the Lichess formula on the Stockfish evaluation, from your point of view. A phase's number is the win chance at its end minus the one at its start; the end of the game counts as your result (100 win, 50 draw, 0 loss), so a loss on time or a resignation counts too. A game that never reaches a phase adds 0 for it, which is why the phases add up to your score.</li>
       <li><b>Why this, and not the number of blunders?</b> Win chance is shared: what you lose, your opponent gains. So a phase where you lose points is a phase where your opponents outplay you. The middlegame has the most blunders for every player because it is the longest and hardest phase; that alone isn't a weakness.</li>
-      <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, at the moment the phase changes.</li>
+      <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, according to Stockfish at the moment the phase changes. So "equal out of the opening, worse when the endgame began" means you lost the thread in the middlegame.</li>
       <li><b>95% range</b>: if you played many more games like these, the true average would lie in this range 95% of the time. With fewer than 10 games it is shown with a "few games" label.</li></ul></details></div>`;
 }
 function errMatrixHtml(A) {
@@ -951,6 +954,25 @@ function errMatrixHtml(A) {
       <li><b>Positional / planning</b>: everything else: a wrong plan, a bad piece placement or pawn move, a wrong exchange.</li></ul>
       <p>All tags (one error can have several): ${Object.entries(A.tags).map(([t, n]) => `${esc(t)} ${n}`).join(" · ") || "none"}.</p></details></div>`;
 }
+// one row per "how you came out of the opening", followed through to the endgame and the result, as counts
+function pathTable(F, total) {
+  const T = F.T.paths; if (!T) return "";
+  const W = { better: "better", equal: "equal", worse: "worse" };
+  const extra = F.ended?.opening || 0;
+  const c = (x, n) => (x ? np(x, n) : `<span class="muted">0</span>`);
+  const rows = ["better", "equal", "worse"].map((k) => { const r = T[k];
+    if (!r.n) return `<tr><td><b>${cap1(W[k])}</b></td><td>0</td><td colspan="8" class="muted">no games</td></tr>`;
+    return `<tr><td><b>${cap1(W[k])}</b></td><td>${np(r.n, total)}</td>
+      <td class="pth-b">${c(r.end.better, r.n)}</td><td class="pth-e">${c(r.end.equal, r.n)}</td><td class="pth-w">${c(r.end.worse, r.n)}</td><td class="muted">${r.end.none}</td>
+      <td>${c(r.res.win, r.n)}</td><td>${c(r.res.draw, r.n)}</td><td>${c(r.res.loss, r.n)}</td><td><b>${r.score}%</b></td></tr>`; }).join("");
+  const say = ["better", "equal", "worse"].filter((k) => T[k].n).map((k) => { const r = T[k], e = r.end;
+    const reached = r.n - e.none;
+    return `<li><b>${cap1(W[k])} out of the opening</b> in ${r.n} game${r.n === 1 ? "" : "s"}. ${reached ? `When the endgame began you were better in ${e.better}, equal in ${e.equal} and worse in ${e.worse}` : "None of them reached an endgame"}${reached && e.none ? `; ${e.none} ended before the endgame` : ""}. Result: won ${r.res.win}, drew ${r.res.draw}, lost ${r.res.loss} (score ${r.score}%).</li>`; }).join("");
+  return `<div class="scroll"><table class="pathtable"><tr><th rowspan="2">Out of the opening</th><th rowspan="2">Games</th><th colspan="4" class="grp">How you stood when the endgame began</th><th colspan="4" class="grp">Final result</th></tr>
+      <tr><th>Better</th><th>Equal</th><th>Worse</th><th>No endgame</th><th>Won</th><th>Draw</th><th>Lost</th><th>Score</th></tr>${rows}</table></div>
+    <ul class="small pathsay">${say}</ul>${extra ? `<p class="small muted">${extra} game${extra === 1 ? "" : "s"} ended while still in the opening and ${extra === 1 ? "isn't" : "aren't"} in this table.</p>` : ""}`;
+}
+const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const PH_TIP = { opening: "Look at your openings (Openings → My repertoire) and the first critical decisions after theory.", middlegame: "Calculation, plans and tactics: puzzles from your games and the thinking test target exactly this.", endgame: "Technique and theory: train the endgames for your level (Train → Endgames)." };
 
 // ------------------------------------------------------------------ COMPARE

@@ -314,3 +314,7 @@ a { color: var(--link); }
 @media (max-width: 640px) { .errrow { flex-direction: column !important; align-items: flex-start; } }
 .errrow b { display: inline; }
 .errrow .pill { margin-left: 6px; }
+.pathtable th.grp { text-align: center; border-bottom: 1px solid var(--line); }
+.pathtable td.pth-b { background: color-mix(in srgb, var(--good) 10%, transparent); }
+.pathtable td.pth-w { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.pathsay li { margin: 4px 0; }
