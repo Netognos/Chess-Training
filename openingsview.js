@@ -21,7 +21,7 @@ function ecoHit(q, eco) {
   return eco.split(/,\s*/).some((part) => { const [a, b = a] = part.split(/[–-]/).map((s) => s.trim()); return a[0] === code[0] && code >= a && code <= (b.length === 3 ? b : a[0] + b); });
 }
 function positionsOf(o) { const c = new Chess(); const out = [{ fen: c.fen(), last: null }]; for (const s of sanList(o.moves)) { const m = c.move(s); out.push({ fen: c.fen(), last: [m.from, m.to], san: m.san }); } return out; }
-function miniBoard(fen, flip) {
+export function miniBoard(fen, flip) {
   const rows = fen.split(" ")[0].split("/"); const cells = [];
   for (let r = 0; r < 8; r++) { let f = 0; for (const ch of rows[r]) { if (/\d/.test(ch)) { for (let k = 0; k < +ch; k++) cells.push({ r, f: f++, p: null }); } else cells.push({ r, f: f++, p: ch }); } }
   const ordered = flip ? cells.slice().reverse() : cells;

@@ -8,6 +8,7 @@ import { readPosition } from "./reader.js";
 import { probe, testingMove, gradeTB, moveScore } from "./tb.js";
 import { mountExplorer, lichessToken, setLichessToken } from "./explorer.js";
 import { familyTableHtml, bindFamilyTable } from "./openingtable.js";
+import { THEMES, themeData, deepDiveHtml, themeOf } from "./deepdive.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle, testSummary } from "./test.js";
@@ -99,15 +100,15 @@ const icon = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</sv
 const SECTIONS = {
   home: { label: "Home", tabs: [["home", "Overview"], ["account", "Profile"], ["log", "Log & backup"]] },
   analyse: { label: "Analyse", tabs: [["games", "Games"], ["report", "Report"], ["compare", "Compare"]] },
-  train: { label: "Train", tabs: [["training", "Plan"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
+  train: { label: "Train", tabs: [["training", "Plan"], ["weak", "Weak points"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
   test: { label: "Test", tabs: [["test", "Test"], ["results", "Results"], ["profile", "Player profile"], ["practice", "Modules"]] },
   openings: { label: "Openings", tabs: [["openings", "Library"], ["repertoire", "My repertoire"]] },
 };
-const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", compare: "Compare players", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
+const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", compare: "Compare players", weak: "Weak points in depth", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
   board: "Analysis board", notebook: "Notebook", test: "Thinking test", results: "Test results", profile: "Player profile", practice: "Training modules", openings: "Opening library", repertoire: "My repertoire" };
 const OC = () => ({ ...C, style: () => currentStyle(P(), C), Board, icon });
 const C = { gen: () => viewGen, P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
-const views = { home, account, games, report, compare, training, puzzles, endgames, board, notebook, log,
+const views = { home, account, games, report, compare, weak, training, puzzles, endgames, board, notebook, log,
   openings: (v, arg) => openingsView(v, arg, OC()), repertoire: (v) => repertoireView(v, OC()),
   test: (v) => testView(v, C), results: (v, a) => resultsView(v, C, a), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
@@ -554,7 +555,8 @@ function report(v) {
   ${errMatrixHtml(A)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
-     ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}</div>
+     ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}${ddTheme(w.key) ? `<div style="margin-top:6px"><button class="btn secondary small" data-ddtheme="${ddTheme(w.key)}">In depth: your positions, principles, books & videos</button></div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}
+    <p class="small" style="margin-top:8px"><a href="#" id="toWeak">All weak points in depth →</a></p></div>
   <div class="card"><h2>Training plan: ${p.hours} h per week</h2>
     <p class="small muted">Based on GM Kuljasevic's study split (tactics 25 · endgames 25 · middlegame 20 · general 20 · openings 10), shifted toward your weak points. Change your hours per week under Home → Profile.</p>
     ${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week${D.plan.split[w.what] !== undefined ? ` (${D.plan.split[w.what]}%)` : ""}${w.weak ? ' <span class="pill mistake">focus</span>' : ""}</b><span class="small">${esc(w.how)}</span></div>`).join("")}</div>
@@ -569,6 +571,8 @@ function report(v) {
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
   bindRepertoire(v, p); bindFamilyTable(v);
   v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
+  v.querySelectorAll("[data-ddtheme]").forEach((b) => (b.onclick = () => go("weak", { theme: b.dataset.ddtheme })));
+  $("#toWeak", v) && ($("#toWeak", v).onclick = (e) => { e.preventDefault(); go("weak"); });
   v.querySelectorAll("[data-rtc]").forEach((b) => (b.onclick = () => { const c = b.dataset.rtc;
     p.settings.repTc = !c ? [] : sel.includes(c) ? sel.filter((x) => x !== c) : [...sel, c]; save(); go("report"); }));
   $("#copyRep").onclick = () => copy(claudeSummary(p, A, D));
@@ -643,6 +647,7 @@ function training(v) {
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
   v.innerHTML = `<div class="card"><h2>Your training</h2>
     <p class="small">Based on ${A ? `your ${A.games} analysed games` : "your profile"}${lastTest ? " and your last test" : ""}. Start with the modules at the top: they target your weak points.</p>
+    <div class="feedback info small" style="margin:8px 0">Want to know <b>what exactly</b> goes wrong, with your own positions, principles, books and videos? <a href="#" data-go="weak">Weak points in depth</a></div>
     <h3>Recommended modules</h3>${rec.length ? rec.slice(0, 6).map((c, i) => `<div class="list-item ${i < 3 ? "weak" : ""}"><div class="row" style="justify-content:space-between"><span><b>${esc(MOD_LABEL(c))}</b> <span class="small muted">${prog(c)}</span></span><button class="btn small" data-prac="${esc(c)}">Train</button></div></div>`).join("") : `<p class="muted small">Analyse games or take the test first.</p>`}
     <h3>Daily routine (${p.hours} h/week)</h3><ol class="small">
       <li><b>Puzzles from your own games</b>: ${duePz} due today. <a href="#" data-go="puzzles">Go</a></li>
@@ -655,18 +660,50 @@ function training(v) {
   v.querySelectorAll("[data-go]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); go(a.dataset.go); }));
 }
 
-// ------------------------------------------------------------------ PUZZLES
-function puzzles(v) {
+// ------------------------------------------------------------------ WEAK POINTS IN DEPTH
+// which deep-dive theme a point from the diagnosis belongs to
+function ddTheme(key = "") {
+  const m = /^err-(opening|middlegame|endgame)-(\w+)$/.exec(key);
+  if (m) return m[2] === "positional" && m[1] === "opening" ? "opening" : m[2];
+  if (/^phase-endgame/.test(key)) return "technique";
+  if (/^phase-opening|^op-/.test(key)) return "opening";
+  if (/missed tactic|hung|mate/.test(key)) return "tactical";
+  if (/time/.test(key)) return "time";
+  if (/positional/.test(key)) return "positional";
+  if (/endgame/.test(key)) return "technique";
+  return null;
+}
+function weak(v, arg) {
   const p = P();
-  const all = Object.values(p.puzzles);
-  const due = all.filter((x) => !x.due || x.due <= today()).sort((a, b) => (a.box || 0) - (b.box || 0) || b.drop - a.drop);
+  if (!Object.keys(p.games || {}).length) { v.innerHTML = `<div class="card"><h2>Weak points in depth</h2><p>Analyse your games first (Analyse → Games): this page is built from your own mistakes.</p><button class="btn" id="g">Load games</button></div>`; $("#g").onclick = () => go("games"); return; }
+  const ranked = Object.keys(THEMES).map((k) => ({ k, ...themeData(p, k) })).sort((a, b) => b.lost - a.lost);
+  p.settings ||= {};
+  const key = (arg && arg.theme) || p.settings.weakTheme || ranked.find((r) => r.errs.length)?.k || "tactical";
+  const elo = playerElo(p);
+  v.innerHTML = `<div class="card"><h2>What to train first</h2><p class="small muted" style="margin-top:-6px">Your mistakes and blunders, grouped by what went wrong, from most to least costly. Tap one to see the patterns in your games, your own positions, the principles to follow and where to learn more.</p>
+    <div class="ddrank">${ranked.map((r, i) => `<button class="ddr ${r.k === key ? "on" : ""}" data-theme="${r.k}"><span class="ddn">${i + 1}</span><span><b>${esc(THEMES[r.k].title)}</b><br><span class="small">${r.errs.length} error${r.errs.length === 1 ? "" : "s"} · −${r.lost}/game</span></span></button>`).join("")}</div>
+    <p class="small muted">"−x/game" = points of win chance these errors cost you per game. Start at the top: that's where the most points are.</p></div>
+    <div id="ddbody">${deepDiveHtml(p, key, esc, elo)}</div>`;
+  v.querySelectorAll("[data-theme]").forEach((b) => (b.onclick = () => { p.settings.weakTheme = b.dataset.theme; save(); go("weak", { theme: b.dataset.theme }); }));
+  v.querySelectorAll("[data-ddfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.ddfen })));
+  v.querySelectorAll("[data-ddgo]").forEach((b) => (b.onclick = () => { const a = JSON.parse(b.dataset.ddarg || "null"); go(b.dataset.ddgo, a || undefined); }));
+}
+
+// ------------------------------------------------------------------ PUZZLES
+function puzzles(v, arg) {
+  const p = P();
+  // from "Weak points": only the positions of one kind of error (all of them, not only the ones due)
+  const flt = arg && (arg.cause || arg.phase) ? (x) => (arg.cause ? themeOf(x) === arg.cause || (arg.cause === "positional" && themeOf(x) === "opening") : true) && (arg.phase ? x.phase === arg.phase : true) : null;
+  const all = Object.values(p.puzzles).filter((x) => !flt || flt(x));
+  const due = (flt ? all : all.filter((x) => !x.due || x.due <= today())).sort((a, b) => (a.box || 0) - (b.box || 0) || b.drop - a.drop);
+  if (!all.length && flt) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>None of your saved puzzles is of this kind yet. Your biggest mistakes become puzzles each time a report is made.</p><button class="btn" id="g">Show all puzzles</button></div>`; $("#g").onclick = () => go("puzzles"); return; }
   if (!all.length) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>Analyse games first: your biggest mistakes become puzzles here.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   const known = all.filter((x) => (x.box || 0) >= 4).length;
   v.innerHTML = `<div class="two"><div><div id="pb"></div><div id="plb"></div><div class="row" style="margin-top:8px"><button class="btn" id="pCheck">Check my lines</button></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
     <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button><button class="btn secondary" id="pWhy">Explain the solution</button></div>
     <div id="pWhyOut"></div>
     <div class="card hidden" id="pReadOut" style="margin-top:12px"></div><div class="card hidden" id="pSheetOut" style="margin-top:12px"></div></div>
-    <div><div class="card"><h2>Your mistakes as puzzles</h2><div class="small muted">${due.length} due · ${all.length} total · ${known} known</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
+    <div><div class="card"><h2>Your mistakes as puzzles</h2>${flt ? `<div class="feedback info small">Only ${arg.cause ? esc(THEMES[arg.cause]?.title.toLowerCase() || arg.cause) : esc(arg.phase) + " mistakes"}. <a href="#" id="pzAll">Show all puzzles</a></div>` : ""}<div class="small muted">${flt ? `${all.length} positions` : `${due.length} due · ${all.length} total · ${known} known`}</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
     <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Put your move <b>and the line you expect</b> on the board: the pieces stay where they are, every move is written down. A move for the other side starts an extra line (another defence or another idea). Press <b>Check my lines</b> and Stockfish judges your main line (★) and the extra lines. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
   const brd = new Board($("#pb"), { orientation: "w" });
   let cur = null, idx = 0, solved = false, tries = 0, lb = null;
@@ -716,6 +753,7 @@ function puzzles(v) {
   $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); lock(); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
   $("#explore").onclick = () => cur && go("board", { fen: cur.fen });
   $("#next").onclick = () => { idx++; show(); };
+  const pa = $("#pzAll"); if (pa) pa.onclick = (e) => { e.preventDefault(); go("puzzles"); };
   $("#pWhy").onclick = async () => {
     if (!cur) return; const out = $("#pWhyOut"); const m = new Chess(cur.fen).move(cur.best);
     out.innerHTML = `<div class="feedback info small">Stockfish is working out why ${esc(cur.best)} is the move…</div>`;
