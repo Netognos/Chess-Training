@@ -1,7 +1,7 @@
 // TEST & PROFILE: adaptive position test (move + why), calculation depth, time, style,
 // player type (Lars Bo Hansen model) and a combined player profile.
 import { Chess } from "./vendor/chess.js";
-import { LineBuilder, sideReport, sideReportHtml } from "./lines.js";
+import { LineBuilder, sideReport, sideReportHtml, stripHtml, bindStrip, LB_HELP } from "./lines.js";
 import { Board } from "./board.js";
 import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
 import { explainMove, explainHtml } from "./explain.js";
@@ -280,13 +280,16 @@ async function runItem(v0, cur, C, opts) {
   const solSan = (() => { const c = new Chess(fen); const o = []; for (const u of sol) { try { o.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } } return o; })();
   const nMine = Math.ceil(sol.length / 2);
   const themes = (it.c ? [it.c] : []).concat(it.t || it.th || []);
-  v.innerHTML = `<div class="two"><div><div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
-    <div><div class="card"><h2>${opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${C.esc(catLabel(opts.cat))}`}</h2>
-      <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
-      <p class="small muted">${slot.kind === "tac" ? "There is something concrete here. Put the <b>whole line</b> you see on the board (the pieces don't move: each move is written down) or type it, plus your idea. Extra lines for other defences or other ideas are checked too." : "There's no direct tactic. Play your move on the board (or type it) and write down the idea or plan behind it. Other candidate moves can go in extra lines."}${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
+  const taskTxt = slot.kind === "tac" ? "There is something concrete here: a tactic, a combination or a forced line. Put the <b>whole line</b> you see on the board (your moves and your opponent's best replies), or type it, and write down your idea in a sentence. Then press <b>Submit answer</b>. Extra lines for other defences or ideas are checked too." : "There's no direct tactic. Play the move you think is best on the board (or type it) and write down the idea or plan behind it. Other candidate moves can go in extra lines. Then press <b>Submit answer</b>.";
+  const stripTitle = opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${catLabel(opts.cat)}`;
+  v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, stripTitle, stm)}<div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
+    <div><div class="card"><h2 class="desk-only">${C.esc(stripTitle)}</h2>
+      <p class="small muted">${slot.kind === "tac" ? "Find the line and say why it works." : "Find the best move and the plan behind it."} <button class="linkbtn" type="button" id="tInfo2">ⓘ More</button>${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
       <div class="small" style="margin:6px 0">AI coach: ${aiKey() ? "<b>on</b>" : "<b>off</b>"} · <a href="#" id="aiToggle">${aiKey() ? "settings" : "set up (free)"}</a></div><div id="aiInline" class="card hidden"></div>
       <div id="stage"></div><div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
+  const infoHtml = `<b>${stm === "w" ? "White" : "Black"} to move.</b><p>${taskTxt}</p>${LB_HELP}`;
+  bindStrip(v, brd, slot.kind, infoHtml); v.querySelector("#tInfo2").onclick = () => { brd.showInfo(infoHtml); v.querySelector("#tb").scrollIntoView({ block: "nearest" }); };
   // background: while you think, Stockfish already works out the solution and evaluates the position
   const ceng = cachedEngine(C.engine());
   const rootMs = slot.kind === "pos" ? 1200 : 700;

@@ -328,3 +328,19 @@ a { color: var(--link); }
 .ddp details { margin: 6px 0; }
 .ddprin li { margin: 6px 0; }
 .ddlist li { margin: 6px 0; }
+/* task bar above the board + explanation over the board */
+.tstrip { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; max-width: 480px; }
+.tstrip .tsl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tstrip .tsm { font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); }
+.tstrip .tsm.w { background: #fff; color: #111; }
+.tstrip .tsm.b { background: #222; color: #fff; border-color: #222; }
+.tstrip .tsr { display: flex; gap: 6px; align-items: center; }
+.ibtn { border: 1px solid var(--felt); background: var(--card); color: var(--felt); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.ibtn:focus-visible, .binfo-x:focus-visible { outline: 2px solid var(--felt); outline-offset: 2px; }
+.binfo { position: absolute; inset: 0; z-index: 30; background: rgba(15, 30, 24, .55); display: flex; align-items: center; justify-content: center; padding: 8px; border-radius: 6px; }
+.binfo-in { background: var(--card); color: var(--ink); border-radius: 10px; padding: 12px 14px; max-height: 100%; overflow: auto; font-size: 13.5px; line-height: 1.45; box-shadow: 0 6px 24px rgba(0,0,0,.3); width: 100%; }
+.binfo-in ul { margin: 6px 0 0; padding-left: 18px; } .binfo-in li { margin: 3px 0; } .binfo-in p { margin: 6px 0; }
+.lbhint { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.lbhelp { color: var(--felt); font-weight: 650; font-size: 12.5px; }
+@media (max-width: 900px) { .desk-only { display: none; } }
+.binfo-in > div:last-child { position: sticky; bottom: -12px; background: var(--card); padding: 8px 0 2px; }

@@ -5,7 +5,7 @@
 //    You put the whole line on the board; the score is how many half-moves you got right in a row.
 import { Chess } from "./vendor/chess.js";
 import { Board } from "./board.js";
-import { LineBuilder, fmt } from "./lines.js";
+import { LineBuilder, fmt, stripHtml, bindStrip, LB_HELP } from "./lines.js";
 import { styleOf, STYLES } from "./style.js";
 import { lineToCp, winPct } from "./engine.js";
 
@@ -34,14 +34,15 @@ const sanOf = (fen, uci) => { try { return new Chess(fen).move({ from: uci.slice
 // ------------------------------------------------------------------ STYLE
 export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext }) {
   const fen = it.fen, stm = fen.split(" ")[1];
-  v.innerHTML = `<div class="two"><div><div id="tb"></div></div>
-    <div><div class="card"><h2>${C.esc(title)}</h2>
-      <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
+  const styleInfo = `<b>${stm === "w" ? "White" : "Black"} to move. Style position.</b><p>Several moves are good here, each of a different kind (calm, sharp, theoretical…). There's no wrong answer among them: play the move <b>you</b> would choose in a game by dragging or tapping it on the board. The test records which kind of move you prefer. Writing why is optional.</p>`;
+  v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, title, stm)}<div id="tb"></div></div>
+    <div><div class="card"><h2 class="desk-only">${C.esc(title)}</h2>
       <p class="small"><b>Style position.</b> Several moves are good here, each of a different kind. There's no wrong answer among them: play the move <b>you</b> would choose in a game. The test records which kind of move you prefer.${it.src === "opening" && it.name ? `<br><span class="muted">Opening: ${C.esc(it.name)}</span>` : ""}</p>
       <label class="small">Why this move? (optional)</label><textarea id="why" rows="2" placeholder="e.g. develop first, attack later…"></textarea>
       <p class="small muted">Play your move on the board.</p>
       <div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm);
+  bindStrip(v, brd, "style", styleInfo);
   const t0 = Date.now();
   const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   brd.onMove = async (mv) => {
@@ -79,14 +80,15 @@ export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext })
 export async function runDeep(v, C, { it, title, onRecord, nextLabel, onNext }) {
   const fen = it.fen, stm = fen.split(" ")[1];
   const sol = it.sol, solSan = it.san;
-  v.innerHTML = `<div class="two"><div><div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
-    <div><div class="card"><h2>${C.esc(title)}</h2>
-      <div class="row" style="justify-content:space-between"><b>${stm === "w" ? "White" : "Black"} to move</b><span class="pill" id="timer">0:00</span></div>
+  const deepInfo = `<b>${stm === "w" ? "White" : "Black"} to move. Deep calculation.</b><p>In this line <b>every</b> move, yours and your opponent's, is the only good move. It is ${Math.ceil(sol.length / 2)} of your moves long. Put it on the board as far as you can see (the pieces stay put), including your opponent's only replies, then press <b>Submit</b>.</p>${LB_HELP}`;
+  v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, title, stm)}<div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
+    <div><div class="card"><h2 class="desk-only">${C.esc(title)}</h2>
       <p class="small"><b>Deep calculation.</b> In this line <b>every</b> move — yours and your opponent's — is the only good move: any other move throws away the win or loses. The line is ${Math.ceil(sol.length / 2)} of your moves long (${sol.length} half-moves). Put it on the board as far as you can see (the pieces stay put), including your opponent's only replies, then submit.</p>
       <label class="small">Your line</label><input id="line" placeholder="or type it: e.g. Rxf7 Kxf7 Qh5+ …" style="width:100%">
       <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit</button></div><div id="perr" class="small" style="color:var(--bad)"></div>
       <div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm);
+  bindStrip(v, brd, "deep", deepInfo);
   const inp = v.querySelector("#line");
   const lb = new LineBuilder({ board: brd, rootFen: fen, el: v.querySelector("#lbox"), esc: C.esc, maxLines: 1, onChange: () => { if (!inp.dataset.manual) inp.value = lb.mainSan(); } });
   inp.oninput = () => { if (inp.value.trim()) inp.dataset.manual = "1"; else delete inp.dataset.manual; };

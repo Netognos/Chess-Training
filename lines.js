@@ -5,6 +5,24 @@ import { lineToCp, winPct } from "./engine.js";
 
 const posAt = (root, moves, n) => { const c = new Chess(root); for (const m of moves.slice(0, n)) c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] }); return c; };
 
+export const LB_HELP = `<b>How to enter moves</b><ul>
+  <li><b>Drag or tap</b> a piece to its square. The pieces stay where they are on the board (you calculate it in your head), but each move counts: after 1.e4 you continue with the pawn from e4.</li>
+  <li>Every move is written down as a <b>line</b> under the board. Your opponent's replies go in the same line.</li>
+  <li>A move for the side that isn't to move starts a <b>new line</b>: another idea, or another defence you looked at.</li>
+  <li><b>★</b> = your main line. On other lines, <b>✓</b> = "I think this works", <b>✗</b> = "I looked at it, it doesn't work". Stockfish checks whether you were right.</li>
+  <li><b>↶ Undo</b> takes back one move, <b>⏮ Start</b> jumps to the beginning, tap a move in a line to continue from there.</li></ul>`;
+// The bar above the board: which position, who is to move, the clock, and an ⓘ that opens the task over the board.
+export function stripHtml(esc, title, stm) {
+  return `<div class="tstrip"><span class="tsl"><b>${esc(title)}</b><span class="tsm ${stm === "w" ? "w" : "b"}">${stm === "w" ? "White" : "Black"} to move</span></span>
+    <span class="tsr"><span class="pill" id="timer">0:00</span><button class="ibtn" id="tInfo" type="button" aria-label="What to do here">ⓘ What to do</button></span></div>`;
+}
+// open the task automatically the first time a kind of position is shown
+export function bindStrip(v, board, kind, html) {
+  const b = v.querySelector("#tInfo"); if (b) b.onclick = () => board.showInfo(html);
+  let seen = true; try { seen = localStorage.getItem("chesscoach.info." + kind) === "1"; localStorage.setItem("chesscoach.info." + kind, "1"); } catch {}
+  if (!seen) board.showInfo(html);
+}
+
 export class LineBuilder {
   constructor({ board, rootFen, el, esc, onChange = () => {}, maxLines = 6 }) {
     this.board = board; this.root = rootFen; this.el = el; this.esc = esc; this.onChange = onChange; this.maxLines = maxLines;
@@ -102,11 +120,12 @@ export class LineBuilder {
         ${i === this.main ? "" : `<span class="lbv"><button class="lbok${l.verdict === "good" ? " on" : ""}" data-v="${i}:good" title="I think this works">✓</button><button class="lbbad${l.verdict === "bad" ? " on" : ""}" data-v="${i}:bad" title="I looked at this, but it doesn't work">✗</button></span>`}<button class="lbdel" data-del="${i}" title="Delete line">🗑</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted">${this.lines.length ? "The arrows show the selected line (green = you, red = opponent, the latest move strongest). Click a move to continue from there. Mark extra lines with ✓ (works) or ✗ (looked at it, doesn't work): Stockfish checks whether you were right. A move for the other side starts a new line (another idea or another defence). ★ = main line." : "Drag or tap your moves: the pieces stay where they are on the board (calculate it in your head), but they count as moved. After 1.e4 you continue with the pawn from e4, even though the board still shows it on e2. Each move is written down here as a line. A move for the side that isn't to move starts a second line."}</div>
+      <div class="small muted lbhint">${this.lines.length ? "Green arrows = your moves, red = your opponent's. ★ main line · ✓/✗ other lines." : "Drag or tap your moves; the pieces stay put but each move counts."} <button class="linkbtn lbhelp" type="button">ⓘ How?</button></div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.hist.length ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>
         <button class="btn secondary small" data-act="start" ${this.line && this.cursor ? "" : "disabled"}>⏮ Start</button><label class="row small"><input type="checkbox" data-act="arrows" ${this.arrows ? "checked" : ""}> Arrows</label><label class="row small"><input type="checkbox" data-act="follow" ${this.follow ? "checked" : ""}> Move the pieces on the board</label>${this.lines.length ? `<button class="btn secondary small" data-act="clear">Clear all</button>` : ""}</div></div>`;
+    const hb = this.el.querySelector(".lbhelp"); if (hb) hb.onclick = () => this.board.showInfo(LB_HELP);
     this.el.querySelectorAll(".lbm").forEach((a) => (a.onclick = (e) => { e.preventDefault(); this.cur = +a.dataset.l; this.cursor = +a.dataset.p; this.render(); }));
     this.el.querySelectorAll("[data-sel]").forEach((a) => (a.onclick = () => { this.cur = +a.dataset.sel; this.cursor = this.line.moves.length; this.render(); }));
     this.el.querySelectorAll("[data-main]").forEach((b) => (b.onclick = () => { this.main = +b.dataset.main; this.render(); this.onChange(); }));

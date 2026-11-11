@@ -23,6 +23,18 @@ export class Board {
     this.render();
   }
 
+  // an explanation laid over the board itself, so it is on screen next to the moves (tap "Got it" or outside to close)
+  showInfo(html) {
+    this.hideInfo();
+    const d = document.createElement("div"); d.className = "binfo";
+    d.innerHTML = `<div class="binfo-in" role="dialog" aria-label="Explanation">${html}<div style="margin-top:10px"><button class="btn small binfo-x">Got it</button></div></div>`;
+    d.addEventListener("pointerdown", (e) => e.stopPropagation());
+    d.onclick = (e) => { if (e.target === d || e.target.closest(".binfo-x")) this.hideInfo(); };
+    this.el.appendChild(d); this.infoEl = d;
+    d.querySelector(".binfo-x").focus({ preventScroll: true });
+  }
+  hideInfo() { if (this.infoEl) { this.infoEl.remove(); this.infoEl = null; } }
+
   setFen(fen, { last = null } = {}) { this.chess = new Chess(fen); this.sel = null; this.last = last; this.arrows = []; this.render(); }
   fen() { return this.chess.fen(); }
   setOrientation(c) { this.orientation = c; this.render(); }
