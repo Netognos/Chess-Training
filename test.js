@@ -7,7 +7,7 @@ import { PLAYER_TYPES, QUESTIONNAIRE, STYLE_OPENINGS } from "./data.js";
 import { explainMove, explainHtml } from "./explain.js";
 import { aiKey, setAiKey, testKey, rubricFrom, judgeReasoning } from "./ai.js";
 import { lineToCp, winPct } from "./engine.js";
-import { pvToSan } from "./analysis.js";
+import { pvToSan, punishText } from "./analysis.js";
 import { runStyle, runDeep, pickExtra, extraBank } from "./testextra.js";
 import { STYLES } from "./style.js";
 
@@ -20,9 +20,10 @@ async function gradeWith(eng, fen, uci, movetime = 700) {
   const [best] = await eng.analyse(fen, { movetime });
   const c = new Chess(fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
   let after;
-  if (c.isCheckmate()) after = 10000; else if (c.isDraw()) after = 0; else { const [l] = await eng.analyse(c.fen(), { movetime }); after = -lineToCp(l); }
+  let reply = null;
+  if (c.isCheckmate()) after = 10000; else if (c.isDraw()) after = 0; else { const [l] = await eng.analyse(c.fen(), { movetime }); after = -lineToCp(l); reply = l?.pv || null; }
   const bcp = lineToCp(best); const drop = Math.max(0, winPct(bcp) - winPct(after));
-  return { drop, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8) };
+  return { drop, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8), punish: reply && drop >= 5 ? punishText(c.fen(), reply) : "" };
 }
 // How far does the calculation hold up, even when the first move was wrong? After your first move, every reply you
 // expected is compared with the opponent's best defence and every follow-up of yours with the best continuation.
@@ -73,7 +74,8 @@ export function ratingInfo(p) {
   const gs = Object.values(p.games || {}).filter((g) => +g.playerElo > 0 && g.tc !== "bullet").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const games = gs.length >= 5 ? Math.round(gs.slice(0, 10).reduce((a, g) => a + +g.playerElo, 0) / Math.min(10, gs.length)) : null;
   const stated = +p.rating || (p.level === "new" ? 500 : p.level === "rules" ? 800 : null);
-  const used = p.ratingPref === "mine" && stated ? stated : games ?? stated ?? 1000;
+  // a rating the player typed wins until they choose the games' rating (never replaced silently)
+  const used = +p.rating && p.ratingPref !== "games" ? +p.rating : p.ratingPref === "mine" && stated ? stated : games ?? stated ?? 1000;
   return { games, stated, used, differ: games && +p.rating && Math.abs(games - +p.rating) > 200 };
 }
 export function playerElo(p) { return ratingInfo(p).used; }
@@ -389,7 +391,7 @@ async function runItem(v0, cur, C, opts) {
     for (const u of sol.slice(0, pre)) { const m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); last = [m.from, m.to]; }
     const sfen = c.fen(); brd.setFen(sfen, { last }); brd.setOrientation(stm);
     const first = pre === 0;
-    v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> This counts as "with help".</div>`}
+    v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> <span class="muted">What you found yourself so far counts fully; the moves you add now count as found "with help" (you've seen the reply).</span></div>`}
       ${first ? `<label class="f" style="margin-top:6px"><b style="color:var(--ink)">Your idea: what's going on and why?</b><textarea id="why" style="min-height:60px" placeholder="E.g. 'The black king has no escape squares, so after Rxf7 there's a back-rank mate'"></textarea></label>` : ""}
       <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${first ? "Your move, or your whole line" : "Continue the line"}</b>
       <input id="line" placeholder="e.g. Nd2, or a line: Rxf7 Kxf7 Qh5+ Kg8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
@@ -448,7 +450,7 @@ async function runItem(v0, cur, C, opts) {
       if (slot.kind === "pos") {
         const u = parsed.moves[0];
         if (u.uci === sol[0]) { moveScore = 1; allNotes.push(`${u.san}: exactly the move the grandmaster panel chose.`); }
-        else { const g = await gradeWith(ceng, fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance).` : `${u.san}: not the right idea (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
+        else { const g = await Cg.gradeMove(fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance)${g.punish ? `: after it, ${g.punish}` : ""}.` : `${u.san}: not the right idea${g.punish ? `: after it, ${g.punish}` : ""} (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
         if (parsed.moves.length > 2) { const gl = await gradeLine(Cg, fen, parsed.moves, sol); if (gl.own > 1) allNotes.push(`Your follow-up holds up for ${gl.own} of your moves.`); }
         if (moveScore < 0.4 && parsed.moves.length > 2) await runCalc(parsed.moves);
         return finish(moveScore >= 1 ? "Correct!" : moveScore > 0 ? "Partly right." : "Not the right move.");
@@ -662,8 +664,8 @@ function styleComment(S) {
   const out = [];
   const { ahead, equal, behind } = S.acc;
   if (ahead && behind) {
-    if (behind > ahead + 3) out.push("You play more accurately when you're worse than when you're better: you defend well, but you let winning positions slip. Work on technique and calm when you're ahead.");
-    else if (ahead > behind + 3) out.push("You play better when you're ahead than when you're behind. In bad positions you lose your accuracy: practise defending (Defence module) and stay calm in worse positions.");
+    // (accuracy by eval isn't used for a verdict: in lost or won positions most moves change the win chance little,
+    // so accuracy is inflated there; whether you convert or defend shows in the Report's converted / saved numbers)
   }
   if (S.sacPer10 >= 5) out.push(`You sacrifice often (${S.sacPer10} per 10 games)${S.sacUnsound > S.sacSound ? ", but more often unsoundly than soundly: calculate first, or prepare it with one extra move" : ", and mostly soundly"}.`);
   if (S.earlyQueenTradePct >= 30) out.push("You often trade queens early, which points to a technical, low-risk style.");
@@ -693,7 +695,7 @@ export function currentStyle(p, C) {
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
   if (!t && !A) return null;
-  if (!t && gs.length < 15) return null; // too early to tell from a handful of games (and no test)
+  if (!t && gs.length < 30) return null; // too early to tell from games alone (and no test)
   const R = t ? computeResult(p, t, A) : null;
   const type = R ? R.type : guessTypeFromGames(A);
   return { type, typeName: PLAYER_TYPES[type].name, aggression: R ? R.aggression : A?.style?.aggression ?? null, fromTest: !!R, A };

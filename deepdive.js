@@ -152,7 +152,8 @@ export function themeData(p, key, games = Object.values(p.games || {})) {
   const errs = [];
   for (const g of games) for (const e of g.errors || []) if ((e.label === "mistake" || e.label === "blunder") && themeOf(e) === key) errs.push({ ...e, g });
   const all = games.reduce((a, g) => a + (g.errors || []).filter((e) => e.label === "mistake" || e.label === "blunder").length, 0);
-  return { errs: errs.sort((a, b) => b.drop - a.drop), all, games: games.length, lost: +(errs.reduce((a, e) => a + (e.drop || 0), 0) / Math.max(1, games.length)).toFixed(1) };
+  const seen = new Set(); const uniq = errs.sort((a, b) => b.drop - a.drop).filter((e) => { const k = e.fen + e.played; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { errs: uniq, all, games: games.length, lost: +(errs.reduce((a, e) => a + (e.drop || 0), 0) / Math.max(1, games.length)).toFixed(1) };
 }
 
 // patterns in your own errors of this theme, as short sentences with numbers
@@ -228,7 +229,7 @@ export function deepDiveHtml(p, key, esc, elo, games) {
     ${pos.length ? `<div class="card"><h2>Your positions</h2><p class="small muted">Your ${pos.length} costliest moves of this kind. Look at the position, find the better move yourself, then open the explanation.</p>
       <div class="ddpos">${pos.map((e, i) => `<div class="ddp">${miniBoard(e.fen, e.fen.split(" ")[1] === "b")}
         <div><b>Move ${e.moveNo}, ${e.fen.split(" ")[1] === "w" ? "White" : "Black"} to move</b> <span class="pill ${e.label}">−${Math.round(e.drop)}%</span>
-        <div class="small muted">${esc(e.g.opening || "")}${e.g.date && !/\?/.test(e.g.date) ? ` · ${esc(e.g.date)}` : ""}${e.g.site && /^https?:/.test(e.g.site) ? ` · <a href="${esc(e.g.site)}" target="_blank" rel="noopener">game</a>` : ""}</div>
+        <div class="small muted">vs ${esc((e.g.color === "w" ? e.g.black : e.g.white) || "?")} · ${esc(e.g.opening || "")}${e.g.date && !/\?/.test(e.g.date) ? ` · ${esc(e.g.date)}` : ""}${e.g.site && /^https?:/.test(e.g.site) ? ` · <a href="${esc(e.g.site)}" target="_blank" rel="noopener">game</a>` : ""}</div>
         <details class="small"><summary>Show what happened</summary><p>You played <b>${esc(e.played)}</b>; better was <b>${esc(e.best)}</b>${e.bestLine ? ` (${esc(e.bestLine)})` : ""}.</p><ul>${explain(e).map((x) => `<li>${esc(x)}</li>`).join("")}</ul></details>
         <button class="btn secondary small" data-ddfen="${esc(e.fen)}">Open on board</button></div></div>`).join("")}</div></div>` : ""}
     <div class="card"><h2>Principles to follow</h2><ol class="ddprin">${T.principles.map(([h, x]) => `<li><b>${esc(h)}</b>. ${esc(x)}</li>`).join("")}</ol>

@@ -67,8 +67,10 @@ export function diagnose(A, player = {}) {
   for (const o of A.families || A.openings || []) {
     if (o.games < 3 || o.wpAfter10 === null || /no name in the PGN/.test(o.name)) continue;
     const side = o.color === "w" ? "White" : "Black";
-    if (o.wpAfter10 >= 55) strengths.push({ title: `Opening: ${o.name} (${side})`, evidence: `${o.games} games: win chance after the opening averages ${o.wpAfter10}%, score ${o.scorePct}%.` });
-    else if (o.wpAfter10 <= 40) weaknesses.push({ key: "op-" + o.name, area: "Openings", title: `Opening problems: ${o.name} (${side})`, evidence: `${o.games} games: after the opening your win chance is only ${o.wpAfter10}% on average. Review the main line and its typical plans, or switch.` });
+    // "Sicilian Defense" with White means you played against it
+    const lab = /Defen[cs]e/.test(o.name) && o.color === "w" ? `as White against the ${o.name}` : `${o.name}, as ${side}`;
+    if (o.wpAfter10 >= 55) strengths.push({ title: `Opening: ${lab}`, evidence: `${o.games} games: win chance after the opening averages ${o.wpAfter10}%, score ${o.scorePct}%.` });
+    else if (o.wpAfter10 <= 40) weaknesses.push({ key: "op-" + o.name, area: "Openings", title: `Opening problems: ${lab}`, evidence: `${o.games} games: after the opening your win chance is only ${o.wpAfter10}% on average. Review the main line and its typical plans, or switch.` });
   }
   // a bad score in an endgame type is only a technique problem when you lose points IN the endgame (not when you
   // were already worse when it started) and play it less accurately than usual

@@ -1,7 +1,7 @@
 import { Chess } from "./vendor/chess.js";
 import { Engine, lineToCp, winPct, fmtScore } from "./engine.js";
 import { Board } from "./board.js";
-import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES, gameTime } from "./analysis.js";
+import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES, gameTime, punishText } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
@@ -81,7 +81,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.re
 function logEvent(type, text) { const p = P(); if (!p) return; p.log.unshift({ date: new Date().toISOString(), type, text }); save(); }
 function newPlayer(d) {
   const id = "p" + Date.now().toString(36);
-  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4, level: d.level || "", tcs: d.tcs || [],
+  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 2, level: d.level || "", tcs: d.tcs || [],
     createdAt: today(), games: {}, reports: [], puzzles: {}, endgames: {}, customEndgames: [], notebook: [], log: [], nextSteps: [], repertoire: { white: "", vsE4: "", vsD4: "", notes: "" }, settings: { movetime: 150 } };
   S.current = id; save(); return id;
 }
@@ -108,7 +108,7 @@ const SECTIONS = {
 const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Load games", mygames: "My games", report: "Report", compare: "Compare players", weak: "Weak points in depth", learn: "Learn chess", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
   board: "Analysis board", notebook: "Notebook", test: "Thinking test", results: "Test results", profile: "Player profile", practice: "Training modules", openings: "Opening library", repertoire: "My repertoire" };
 const OC = () => ({ ...C, style: () => currentStyle(P(), C), Board, icon });
-const C = { gen: () => viewGen, P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
+const C = { gen: () => viewGen, P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine(), analysePgn: (pgn, name) => analysePgnNow(pgn, name) };
 const views = { home, account, games, mygames, report, compare, weak, training, puzzles, endgames, board, notebook, log,
   openings: (v, arg) => openingsView(v, arg, OC()), repertoire: (v) => repertoireView(v, OC()),
   learn: (v, arg) => learnView(v, arg, C), test: (v) => testView(v, C), results: (v, a) => resultsView(v, C, a), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
@@ -138,8 +138,11 @@ function measureBars() {
 }
 if (window.ResizeObserver) { const ro = new ResizeObserver(measureBars); ro.observe($(".topbar")); ro.observe($("#tabs")); }
 window.addEventListener("resize", measureBars);
+let prevNav = null, curNav = null;
 function go(t, arg) {
   window.__ccFollowDefault = ["new", "rules"].includes(P()?.level);
+  if (!curNav || curNav.t !== t) prevNav = curNav; curNav = { t, arg };
+  document.querySelectorAll("img.ghost").forEach((x) => x.remove());
   tab = t;
   const v = $("#view"); v.innerHTML = "";
   if (!P() && t !== "home" && t !== "openings") { tab = "home"; renderNav(); home(v); return renderPicker(); }
@@ -203,27 +206,28 @@ function home(v) {
   const gsCard = nDone < stepsDef.length ? `<div class="card"><h2>Getting started</h2><p class="small muted">${nDone} of ${stepsDef.length} done</p><div class="progress">${stepsDef.map(([, d]) => `<span class="${d ? "done" : ""}"></span>`).join("")}</div>
       <div class="steps" style="margin-top:12px">${stepsDef.map(([l, d, t], i) => `<button class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${i + 1}</div>${l}</button>`).join("")}</div></div>` : "" || "";
   v.innerHTML = `<div class="hello"><div><div class="who">${new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"},</div><h1 style="margin:0;font-size:34px;font-weight:780">${esc(p.name)}</h1></div>
-      <div class="rating"><b>${playerElo(p)}</b>rating${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
+      <div class="rating">${p.level === "new" && !nG ? `<b>Beginner</b>` : `<b>${playerElo(p)}</b>rating`}${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
     ${nDone < 3 ? gsCard : ""}
     <div class="card"><h2>Today</h2><div class="today">
-      ${p.level === "new" || (p.learn && Object.keys(p.learn).length && LESSONS.some((l) => !(p.learn || {})[l.id])) ? (() => { const d = LESSONS.filter((l) => (p.learn || {})[l.id]).length; const nx = LESSONS.find((l) => !(p.learn || {})[l.id]); return todo("train", nx ? "Learn the basics" : "Play the computer", nx ? `Lesson ${d + 1} of ${LESSONS.length}: ${esc(nx.title)}` : "All lessons done. Play a game at your level", null, "learn", nx ? (d ? "Continue" : "Start") : "Play"); })() : ""}
+      ${p.level === "new" || (p.learn && Object.keys(p.learn).length && LESSONS.some((l) => !(p.learn || {})[l.id])) ? (() => { const d = LESSONS.filter((l) => (p.learn || {})[l.id]).length; const nx = LESSONS.find((l) => !(p.learn || {})[l.id]); return todo("train", nx ? "Learn the basics" : "Play the computer", nx ? `Lesson ${d + 1} of ${LESSONS.length}: ${esc(nx.title)}` : "All lessons done. Play a game at your level", null, nx ? "learn:" + nx.id : "learn:play", nx ? (d ? "Continue" : "Start") : "Play"); })() : ""}
       ${todo("puzzle", "Puzzles from your games", duePz ? "Your own mistakes, repeated at spaced intervals" : nG ? "Nothing due. Come back tomorrow" : "Import games first: your mistakes become puzzles", duePz, nG ? "puzzles" : "games", duePz ? "Solve" : nG ? "Open" : "Import")}
       ${todo("king", "Endgames to review", "Theory positions you play out against the engine", dueEg, "endgames", "Train")}
-      ${todo("test", tests.length ? "Thinking test" : "Take the thinking test", tests.length ? (() => { const lt = tests[tests.length - 1]; const rated = lt.items.some((i) => i.kind !== "style" && i.rating); return `Last test ${esc(lt.date)}: ${rated ? `test rating ${lt.result?.overall ?? "–"}` : `${lt.items.length} style positions`}`; })() : "Measures calculation depth, style and player type", null, tests.length ? "results" : "test", tests.length ? "Results" : "Start")}
+      ${(p.tests || []).some((t) => !t.done) ? todo("test", "Thinking test", `In progress: ${(p.tests.find((t) => !t.done).items || []).length} position${(p.tests.find((t) => !t.done).items || []).length === 1 ? "" : "s"} done`, null, "test", "Continue") : ""}
+      ${(p.tests || []).some((t) => !t.done) ? "" : todo("test", tests.length ? "Thinking test" : "Take the thinking test", tests.length ? (() => { const lt = tests[tests.length - 1]; const rated = lt.items.some((i) => i.kind !== "style" && i.rating); return `Last test ${esc(lt.date)}: ${rated ? `test rating ${lt.result?.overall ?? "–"}` : `${lt.items.length} style positions`}`; })() : "Measures calculation depth, style and player type", null, tests.length ? "results" : "test", tests.length ? "Results" : "Start")}
       ${todo("analyse", "Your games", nG ? `${nG} games analysed${last ? `, last report ${esc(last.date)}` : ""}` : "Load the last months from Lichess or Chess.com", null, "games", nG ? "Import new" : "Import")}
       ${todo("openings", "Openings", st ? `Ideas, strengths and weak sides, with what fits ${/^[aeiou]/i.test(st.typeName) ? "an" : "a"} ${esc(st.typeName.toLowerCase())}` : "Ideas, strengths and weak sides of 36 openings", null, "openings", "Browse")}
     </div></div>
     ${(() => { const R = ratingInfo(p); return R.differ ? `<div class="card"><h2>Which rating should training use?</h2><p class="small">You said <b>${esc(p.rating)}</b>; your games say about <b>${R.games}</b> (from the ratings in the game files). Puzzles, test positions and endgames are pitched at <b>${R.used}</b> now.</p>
-      <div class="row" style="gap:8px"><button class="btn ${p.ratingPref === "mine" ? "" : "secondary"} small" data-rpref="mine">Use mine (${esc(p.rating)})</button><button class="btn ${p.ratingPref === "mine" ? "secondary" : ""} small" data-rpref="games">Use my games (${R.games})</button></div></div>` : ""; })()}
+      <div class="row" style="gap:8px"><button class="btn ${p.ratingPref !== "games" ? "" : "secondary"} small" data-rpref="mine">Use mine (${esc(p.rating)})</button><button class="btn ${p.ratingPref === "games" ? "" : "secondary"} small" data-rpref="games">Use my games (${R.games})</button></div><p class="small muted" style="margin-top:6px">Ratings in game files differ between sites and time controls (a Lichess blitz rating isn't a FIDE rating).</p></div>` : ""; })()}
     <div class="card"><h2>Next steps</h2>${nextStepsHtml(p)}</div>
     ${nDone >= 3 ? gsCard : ""}`;
-  v.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
+  v.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => { const [t, a] = b.dataset.go.split(":"); go(t, t === "learn" && a ? (a === "play" ? { play: true } : { lesson: a }) : undefined); }));
   v.querySelectorAll("[data-rpref]").forEach((b) => (b.onclick = () => { p.ratingPref = b.dataset.rpref; save(); go("home"); }));
   bindNextSteps(v, p);
 }
 function account(v) {
   const p = P();
-  v.innerHTML = `<div class="card"><h2>${esc(p.name)}</h2><p class="small muted">The usernames let the app download your games. Rating is used when there are no games yet.</p>${profileForm(p)}
+  v.innerHTML = `<div class="card"><h2>${esc(p.name)}</h2><p class="small muted">The usernames let the app download your games. Your rating sets the level of puzzles, test positions and endgames; when your games give a different rating, Home lets you choose which one to use.</p>${profileForm(p)}
       <div class="row" style="margin-top:14px"><button class="btn" id="saveP">Save profile</button></div></div>
     <div class="card" id="aiCardA"></div>
     <div class="card"><h2>Lichess token (opening book statistics)</h2><p class="small muted">The opening book works without it. With a free personal Lichess token it also shows how often each move is played and how it scores, in master games and in Lichess games of 1800+ players. Create one (no permissions needed) at <a href="https://lichess.org/account/oauth/token/create?description=Chess%20Coach%20explorer" target="_blank" rel="noopener">lichess.org → API access tokens</a> and paste it here. It stays in this browser only and is not included in backups.</p>
@@ -245,15 +249,15 @@ function profileForm(p) {
   return `<div class="form">${f("name", "Name", p.name)}
     <label class="f">Your level<select id="pf_level"><option value="" ${lvl ? "" : "selected"} disabled>Choose…</option>${LEVELS.map(([k, l]) => `<option value="${k}" ${lvl === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <span id="pf_ratingWrap" class="${lvl === "rated" ? "" : "hidden"}">${f("rating", "Rating (approx.)", p.rating, "number", "e.g. 950")}</span></div>
-    <div class="f" style="margin-top:10px"><span>What do you play? <span class="muted small">(used when loading your games)</span></span><div class="tcpick row" style="gap:6px;flex-wrap:wrap;margin-top:4px">${["bullet", "blitz", "rapid", "classical", "correspondence"].map((c) => `<label class="chip"><input type="checkbox" data-pftc="${c}" ${tcs.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div></div>
+    <div id="pf_more" class="${lvl === "new" ? "hidden" : ""}"><div class="f" style="margin-top:10px"><span>What do you play? <span class="muted small">(used when loading your games)</span></span><div class="tcpick row" style="gap:6px;flex-wrap:wrap;margin-top:4px">${["bullet", "blitz", "rapid", "classical", "correspondence"].map((c) => `<label class="chip"><input type="checkbox" data-pftc="${c}" ${tcs.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div></div>
     <div class="form" style="margin-top:10px">${f("lichess", "Lichess username (optional)", p.lichess)}${f("chesscom", "Chess.com username (optional)", p.chesscom)}</div>
-    <details style="margin-top:10px"><summary class="small"><b>More</b>: over-the-board games, goal, time per week</summary><div class="form" style="margin-top:8px">
-    ${f("pgnName", "Your name in PGN files of club/tournament games", p.pgnName, "text", "e.g. De Wilde, Sam")}${f("hours", "Hours per week for chess", p.hours ?? 4, "number")}
+    </div><details style="margin-top:10px"><summary class="small"><b>More</b>: over-the-board games, goal, time per week</summary><div class="form" style="margin-top:8px">
+    ${f("pgnName", "Your name in PGN files of club/tournament games", p.pgnName, "text", "e.g. De Wilde, Sam")}${f("hours", "Hours per week for chess", p.hours ?? 2, "number")}
     ${f("goal", "Goal", p.goal, "text", "e.g. 1600 rapid by the summer")}</div></details>`;
 }
-function bindProfileForm(v) { const l = $("#pf_level", v); if (l) l.onchange = () => $("#pf_ratingWrap", v).classList.toggle("hidden", l.value !== "rated"); }
+function bindProfileForm(v) { const l = $("#pf_level", v); if (l) l.onchange = () => { $("#pf_ratingWrap", v).classList.toggle("hidden", l.value !== "rated"); $("#pf_more", v).classList.toggle("hidden", l.value === "new"); }; }
 function readProfile(v) { const g = (id) => ($("#pf_" + id, v)?.value || "").trim(); const level = g("level");
-  return { name: g("name"), level, lichess: g("lichess"), chesscom: g("chesscom"), pgnName: g("pgnName"), rating: level === "rated" ? g("rating") : "", hours: +g("hours") || 4, goal: g("goal"),
+  return { name: g("name"), level, lichess: g("lichess"), chesscom: g("chesscom"), pgnName: g("pgnName"), rating: level === "rated" ? g("rating") : "", hours: +g("hours") || 2, goal: g("goal"),
     tcs: [...v.querySelectorAll("[data-pftc]")].filter((x) => x.checked).map((x) => x.dataset.pftc) }; }
 function nextStepsHtml(p) {
   if (!p.nextSteps.length) return `<p class="muted">Steps appear automatically after an analysis. You can also add your own.</p>${addStepHtml()}`;
@@ -305,8 +309,8 @@ function games(v) {
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div>
       <div class="row hidden" id="progBtns" style="gap:8px;margin-top:8px"><button class="btn secondary small" id="progPause">Pause</button><button class="btn secondary small" id="progCancel">Cancel analysis</button></div></div>
-    <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
-    <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: how many half-moves Stockfish looks ahead in every position. It reaches that depth on any device; a phone simply takes longer. Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal (16) is plenty for club games; each step of 2 deeper takes about 2-3× as long. The first moves of a game (theory) and positions that are already won or lost are searched 6 half-moves less deep. Leave "Max. number of games" empty to load every game in the period.</p></div>
+    <details class="small" style="margin-top:10px"><summary><b>Help</b>: phones, time-control categories, analysis depth</summary>    <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
+    <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: how many half-moves Stockfish looks ahead in every position. It reaches that depth on any device; a phone simply takes longer. Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal (16) is plenty for club games; each step of 2 deeper takes about 2-3× as long. The first moves of a game (theory) and positions that are already won or lost are searched 6 half-moves less deep. Leave "Max. number of games" empty to load every game in the period.</p></details></div>
     <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<p>All analysed games are stored and stay available, whatever period you load next. See, filter and replay them in <b>My games</b>.</p>
     <div class="row" style="margin-top:10px;gap:8px"><button class="btn" id="toMy">Open My games</button><button class="btn secondary" id="clearG">Delete all games</button></div>` : `<p class="muted">No games yet.</p>`}</div>`;
   const srcP = $("#srcP");
@@ -334,7 +338,9 @@ const lichessCatsFor = (spec) => [...new Set(spec.map(([b, i]) => { const e = b 
 async function fetchGames(p, opts, status) {
   const out = [];
   const since = Date.now() - opts.months * 30.4 * 86400000;
-  if (opts.lichess && p.lichess) {
+  const failed = []; // one site failing must not stop the others (or the pasted PGN)
+  const site = async (label, fn) => { try { await fn(); } catch (e) { failed.push(`${label}: ${e.message}`); } };
+  if (opts.lichess && p.lichess) await site("Lichess", async () => {
     status("Fetching games from Lichess…");
     const cats = opts.tf.specific.length ? lichessCatsFor(opts.tf.specific) : opts.tf.cats;
     const perf = [...new Set(cats.flatMap((c) => c === "bullet" ? ["ultraBullet", "bullet"] : [c]))].join(",");
@@ -346,8 +352,8 @@ async function fetchGames(p, opts, status) {
       if (!tcMatches(tc, "lichess", opts.tf)) continue;
       out.push({ pgn, name: p.lichess, src: "lichess" });
     }
-  }
-  if (opts.chesscom && p.chesscom) {
+  });
+  if (opts.chesscom && p.chesscom) await site("Chess.com", async () => {
     status("Fetching games from Chess.com…");
     const u = p.chesscom.toLowerCase();
     const r = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(u)}/games/archives`);
@@ -366,7 +372,7 @@ async function fetchGames(p, opts, status) {
         out.push({ pgn: g.pgn, name: p.chesscom, src: "chess.com" });
       }
     }
-  }
+  });
   if (opts.pgn) {
     const pgns = splitPgn($("#pgnText").value);
     let name = $("#pgnName").value.trim();
@@ -374,6 +380,8 @@ async function fetchGames(p, opts, status) {
     if (name) { p.pgnName = name; save(); }
     for (const pgn of pgns) out.push({ pgn, name, src: "pgn" });
   }
+  if (failed.length && !out.length) throw new Error(failed.join(" · "));
+  if (failed.length) toast(`Couldn't reach ${failed.map((f) => f.split(":")[0]).join(" and ")}; loading the other games.`);
   // newest first, capped
   const dateOf = (x) => ((/\[UTCDate "([^"]+)"/.exec(x.pgn) || /\[Date "([^"]+)"/.exec(x.pgn) || [])[1] || "");
   out.sort((a, b) => dateOf(b).localeCompare(dateOf(a)));
@@ -416,6 +424,16 @@ function jobDone(text, q = null) {
   if (!q) setTimeout(() => { if (!running) $("#jobBar").classList.add("hidden"); }, 6000);
 }
 
+// analyse one game right away (a game against the computer) and open it in My games
+async function analysePgnNow(pgn, name) {
+  if (running) return toast("An analysis is already running; try again when it's done");
+  const p = P(); const id = gameKey(pgn);
+  if (p.games[id]) return go("mygames", { id });
+  const q = { player: p.id, items: [{ pgn, name, src: "pgn" }], total: 1, done: 0, added: 0, skipped: 0, depth: 14, src: "computer game", started: new Date().toISOString() };
+  saveQueue(q); toast("Analysing your game…");
+  await processQueue(q);
+  if (P().games[id]) go("mygames", { id }); else toast("That game couldn't be analysed");
+}
 async function runImport(v) {
   const p = P();
   if (running) return toast("An analysis is already running");
@@ -556,7 +574,8 @@ function report(v) {
   const use = sel.length ? gs.filter((g) => sel.includes(TC_CATS.includes(g.tc) ? g.tc : "unknown")) : gs;
   const A = aggregate(use), D = diagnose(A, p);
   const C = A.cpl, E = A.errorCounts || {}, myMoves = Object.values(A.phaseMoves || {}).reduce((a, b) => a + b, 0);
-  const accAll = myMoves ? +(Object.entries(A.phaseAcc).reduce((a, [k, x]) => a + x * A.phaseMoves[k], 0) / myMoves).toFixed(1) : null;
+  const gAcc = use.map((g) => g.accuracy).filter((x) => x != null), oAcc = use.map((g) => g.oppAccuracy).filter((x) => x != null);
+  const accAll = gAcc.length ? +(gAcc.reduce((a, b) => a + b, 0) / gAcc.length).toFixed(1) : null, accOpp = oAcc.length ? +(oAcc.reduce((a, b) => a + b, 0) / oAcc.length).toFixed(1) : null;
   const per100 = (k) => (myMoves ? ` <span class="muted">(${(100 * (E[k] || 0) / myMoves).toFixed(1)}/100 moves)</span>` : "");
   const hist = p.reports.slice(0, 6);
   const moreOpen = p.settings.repMore ?? innerWidth > 900;
@@ -570,7 +589,7 @@ function report(v) {
   <div id="repMore" class="${moreOpen ? "" : "hidden"}">
   <div class="card"><h2>Overview: ${A.games} game${A.games === 1 ? "" : "s"}${sel.length ? ` <span class="muted small">(${sel.map((c) => (TC_LABEL[c] || "unknown").toLowerCase()).join(" + ")})</span>` : ""}</h2><div class="stats">
     <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score · won ${np(A.wins, A.games)} · drawn ${np(A.draws, A.games)} · lost ${np(A.losses, A.games)}</div></div>
-    <div class="stat"><div class="v">${accAll ?? "–"}</div><div class="l">accuracy${C?.all?.opp ? ` · opponents ${C.all.opp.acc}` : ""}</div></div>
+    <div class="stat"><div class="v">${accAll ?? "–"}</div><div class="l">accuracy (average per game)${accOpp != null ? ` · opponents ${accOpp}` : ""}</div></div>
     <div class="stat"><div class="v">${C?.all?.me ? rng(C.all.me.acpl, C.all.me.lo, C.all.me.hi, C.all.me.games) : "–"}</div><div class="l">average centipawn loss${C?.all?.opp ? ` · opponents ${C.all.opp.acpl}` : " (re-analyse to see it)"}</div></div>
     <div class="stat"><div class="v">${E.blunder || 0}</div><div class="l">blunders${per100("blunder")} · mistakes ${E.mistake || 0}${per100("mistake")} · inaccuracies ${E.inaccuracy || 0}${per100("inaccuracy")}</div></div>
     <div class="stat"><div class="v">${A.conversion.chances ? Math.round(100 * A.conversion.won / A.conversion.chances) + "%" : "–"}</div><div class="l">winning positions converted: ${A.conversion.won} of ${A.conversion.chances}</div></div>
@@ -589,7 +608,7 @@ function report(v) {
   ${phasesHtml(A.phases, A.games, C)}
   ${errMatrixHtml(A)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
-  <div class="card"><h2>Training plan: ${p.hours} h per week</h2>
+  <div class="card"><h2>Training plan: ${p.hours} h per week <span class="muted small">(about ${Math.round((p.hours * 60) / 7)} min a day; change it in Profile)</span></h2>
     <p class="small muted">Based on GM Kuljasevic's study split (tactics 25 · endgames 25 · middlegame 20 · general 20 · openings 10), shifted toward your weak points. Change your hours per week under Home → Profile.</p>
     ${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week${D.plan.split[w.what] !== undefined ? ` (${D.plan.split[w.what]}%)` : ""}${w.weak ? ' <span class="pill mistake">focus</span>' : ""}</b><span class="small">${esc(w.how)}</span></div>`).join("")}</div>
   <div class="card"><h2>Openings</h2><p class="small muted" style="margin-top:-6px">Grouped by opening family. Tap a family to see the variations you actually played.</p>${familyTableHtml(A.families, esc, { tid: "rep" })}
@@ -603,6 +622,8 @@ function report(v) {
   <div class="card"><h2>Next</h2><div class="row"><button class="btn" id="toTrain">Start training</button><button class="btn secondary" id="toProfile">Your style & player profile</button></div></div>
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
   bindRepertoire(v, p); bindFamilyTable(v); bindPeriodBar(v, p, "report");
+  // tap a chart point: show its value under the charts (phones have no hover)
+  v.querySelectorAll(".spark .hit").forEach((c) => (c.onclick = () => { const t = $("#sparkTip", v); if (t) t.textContent = c.querySelector("title")?.textContent || ""; }));
   $("#repMoreBtn", v).onclick = () => { p.settings.repMore = !moreOpen; save(); const y = scrollY; go("report"); scrollTo(0, y); };
   v.querySelectorAll("[data-sumgo]").forEach((b) => (b.onclick = () => go(b.dataset.sumgo, JSON.parse(b.dataset.sumarg || "null") || undefined)));
   v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
@@ -683,10 +704,10 @@ function training(v) {
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
   v.innerHTML = `<div class="card"><h2>Your training</h2>
     <p class="small">${A || lastTest ? `Based on ${A ? `your ${A.games} analysed games` : "your test"}${A && lastTest ? " and your last test" : ""}. Start with the modules at the top: they target your weak points.` : `No games or test yet, so these are the basics that decide most games. Load your games (Analyse → Load games) and this plan adapts to your own mistakes.`}</p>
-    ${p.level === "new" ? `<div class="feedback info small" style="margin:8px 0">New to chess? Start with <a href="#" data-go="learn"><b>Learn the basics</b></a>: the rules, with exercises.</div>` : ""}
+    ${p.level === "new" ? (LESSONS.every((l) => (p.learn || {})[l.id]) ? `<div class="feedback info small" style="margin:8px 0">You know the rules now. Next: <b>play the computer</b> a few times a week (go up a level after a win) and do the <b>Attack &amp; mate</b> module below: it starts at your level. <a href="#" data-go="learn">Play the computer</a></div>` : `<div class="feedback info small" style="margin:8px 0">New to chess? Start with <a href="#" data-go="learn"><b>Learn the basics</b></a>: the rules, with exercises.</div>`) : ""}
     <div class="feedback info small" style="margin:8px 0">Want to know <b>what exactly</b> goes wrong, with your own positions, principles, books and videos? <a href="#" data-go="weak">Weak points in depth</a></div>
     <h3>Recommended modules</h3>${rec.length ? rec.slice(0, 6).map((c, i) => `<div class="list-item ${i < 3 ? "weak" : ""}"><div class="row" style="justify-content:space-between"><span><b>${esc(MOD_LABEL(c))}</b> <span class="small muted">${prog(c)}</span></span><button class="btn small" data-prac="${esc(c)}">Train</button></div></div>`).join("") : `<p class="muted small">Analyse games or take the test first.</p>`}
-    <h3>Daily routine (${p.hours} h/week)</h3><ol class="small">
+    <h3>Daily routine (about ${Math.round((p.hours * 60) / 7)} min a day)</h3><ol class="small">
       <li><b>Puzzles from your own games</b>: ${duePz} due today. <a href="#" data-go="puzzles">Go</a></li>
       <li><b>Module of the day</b>: 10 positions from the first recommended module, with the Think sheet for each position.</li>
       <li><b>Endgames</b>: 1 theory position to play out. <a href="#" data-go="endgames">Go</a></li>
@@ -758,7 +779,7 @@ function puzzles(v, arg) {
     getEngine().cancel();
     analyseMemo(cur.fen, { movetime: 900 }).then(([b]) => { if (b?.pv[0]) { const c = new Chess(cur.fen); try { c.move({ from: b.pv[0].slice(0, 2), to: b.pv[0].slice(2, 4), promotion: b.pv[0][4] }); if (!c.isGameOver()) analyseMemo(c.fen(), { movetime: 900 }); } catch {} } });
     const side = cur.fen.split(" ")[1] === "w" ? "White" : "Black";
-    const ev = cur.evalBefore, evTxt = Math.abs(ev) >= 90 ? (ev > 0 ? "you have a forced mate" : "you are getting mated") : Math.abs(ev) < 0.7 ? "about equal" : `you are ${ev > 0 ? "better" : "worse"} (${ev > 0 ? "+" : ""}${ev}: ${ev > 0 ? "up" : "down"} about ${Math.abs(ev).toFixed(1)} pawn${Math.abs(ev) >= 1.5 ? "s" : ""})`;
+    const ev = cur.evalBefore, evTxt = Math.abs(ev) >= 90 ? (ev > 0 ? "you have a forced mate" : "you are getting mated") : Math.abs(ev) < 0.7 ? `about equal (Stockfish ${ev > 0 ? "+" : ""}${ev})` : `you are ${ev > 0 ? "better" : "worse"} (Stockfish ${ev > 0 ? "+" : ""}${ev})`;
     $("#pinfo").innerHTML = `<b>${side === "White" ? "White" : "Black"} to move: find a better move.</b> <span class="small muted">Move ${cur.moveNo} of your game, ${esc(cur.phase)}; ${evTxt}.</span><br><span class="small muted">${cur.played === "?" ? "Your own position." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}.`}</span>`;
     $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden"); $("#pWhyOut").innerHTML = "";
   };
@@ -790,7 +811,7 @@ function puzzles(v, arg) {
     }
     save();
   };
-  $("#hint").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); $("#pfb").innerHTML = `<div class="feedback info">Hint: look at your ${pieceName(m.piece)}${m.captured ? " (it can capture something)" : ""}${m.san.includes("+") ? ", with check" : ""}.</div>`; };
+  $("#hint").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); $("#pfb").innerHTML = `<div class="feedback info">Hint: look at your ${pieceName(m.piece)} on ${m.from}${m.captured ? " (it can capture something)" : ""}${m.san.includes("+") ? ", with check" : ""}.</div>`; };
   $("#show").onclick = () => { if (!cur) return; const m = new Chess(cur.fen).move(cur.best); lock(); brd.setFen(cur.fen); brd.setArrows([{ from: m.from, to: m.to }]); if (!solved) { srs(cur, false); save(); solved = true; } $("#pfb").innerHTML = `<div class="feedback info">Solution: <b>${esc(cur.best)}</b>, line ${esc(cur.bestLine)}</div>${tagHelp(cur)}`; brd.locked = true; };
   $("#explore").onclick = () => cur && go("board", { fen: cur.fen });
   $("#next").onclick = () => { idx++; show(); };
@@ -827,21 +848,6 @@ async function gradeMove(fen, uci, movetime = 900) {
   const drop = Math.max(0, winPct(bcp) - winPct(after));
   const verdict = drop < 2 ? "best" : drop < 5 ? "good" : drop < 10 ? "inaccuracy" : drop < 15 ? "mistake" : "blunder";
   return { drop, verdict, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8), punish: reply ? punishText(c.fen(), reply) : "" };
-}
-// In plain words: what the opponent does against your move ("Qxe5 takes your queen", "Qh7 is mate")
-const PIECE_NAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
-function punishText(fen, pv) {
-  try {
-    const c = new Chess(fen); const m = c.move({ from: pv[0].slice(0, 2), to: pv[0].slice(2, 4), promotion: pv[0][4] });
-    if (c.isCheckmate()) return `your opponent plays ${m.san}, checkmate`;
-    if (m.captured && m.captured !== "p") return `your opponent plays ${m.san} and takes your ${PIECE_NAME[m.captured]}`;
-    // a check or attack now that wins something on the next move
-    if (pv[1] && pv[2]) { const m2 = c.move({ from: pv[1].slice(0, 2), to: pv[1].slice(2, 4), promotion: pv[1][4] }); const m3 = c.move({ from: pv[2].slice(0, 2), to: pv[2].slice(2, 4), promotion: pv[2][4] });
-      if (c.isCheckmate()) return `your opponent plays ${m.san}, and after ${m2.san} ${m3.san} it is checkmate`;
-      if (m3.captured && m3.captured !== "p") return `your opponent plays ${m.san}${m.san.includes("+") ? " (check)" : ""}, and after ${m2.san} wins your ${PIECE_NAME[m3.captured]} with ${m3.san}`; }
-    if (m.captured) return `your opponent plays ${m.san} and wins a pawn`;
-    return `your opponent answers ${m.san}`;
-  } catch { return ""; }
 }
 
 // ------------------------------------------------------------------ ENDGAMES
@@ -1038,7 +1044,7 @@ function summaryHtml(A, D) {
   const theme = cells[0] ? (cells[0].c === "positional" && cells[0].ph === "opening" ? "opening" : cells[0].c) : null;
   const res = `You scored <b>${A.scorePct}%</b> in ${A.games} game${A.games === 1 ? "" : "s"}: ${A.wins} won, ${A.draws} drawn, ${A.losses} lost.`;
   return `<div class="card insh"><h2>In short</h2><p>${res}</p>
-    ${cells.length ? `<p><b>Where your points go</b> (${tot} mistakes and blunders in total):</p><ol>${cells.map((x) => `<li><b>${CN[x.c]} in the ${x.ph}</b>: ${x.n} of ${tot}${x.ex[0] ? `, for example move ${x.ex[0].moveNo} ${esc(x.ex[0].played)} instead of ${esc(x.ex[0].best || "?")}` : ""}.</li>`).join("")}</ol>` : `<p>No mistakes or blunders in these games.</p>`}
+    ${cells.length ? `<p><b>Where your points go</b> (${tot} mistakes and blunders in total):</p><ol>${cells.map((x) => `<li><b>${CN[x.c]} in the ${x.ph}</b>: ${x.n} of ${tot}${x.ex[0] ? `, for example <a href="#" data-errfen="${esc(x.ex[0].fen)}">move ${x.ex[0].moveNo} ${esc(x.ex[0].played)}</a> instead of ${esc(x.ex[0].best || "?")}` : ""}.</li>`).join("")}</ol>` : `<p>No mistakes or blunders in these games.</p>`}
     ${theme ? `<p><b>Do this, 15 minutes a day:</b></p><ul>${DAILY[theme].map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
     <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-sumgo="puzzles" data-sumarg='${JSON.stringify(theme === "opening" ? { phase: "opening" } : { cause: theme })}'>Train my mistakes</button><button class="btn secondary" data-sumgo="weak" data-sumarg='${JSON.stringify({ theme })}'>Explain it in depth</button></div>` : ""}</div>`;
 }
@@ -1145,10 +1151,13 @@ function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
   const X = (i) => L + (rows.length === 1 ? 0 : (i * (W - L - R)) / (rows.length - 1)), Y = (y) => T + (1 - (y - lo) / (hi - lo)) * (H - T - Bm);
   const fmt = (y) => (+y).toFixed(digits) + unit;
   const d = pts.map(([i, y], k) => `${k ? "L" : "M"}${X(i).toFixed(1)},${Y(y).toFixed(1)}`).join(" ");
-  const first = pts[0][1], last = pts[pts.length - 1][1], delta = last - first;
+  // trend: first half of the games vs second half (weighted by games), not first point vs last point
+  const half = (a) => { const w = a.reduce((s, p) => s + p[2].n, 0); return w ? a.reduce((s, p) => s + p[1] * p[2].n, 0) / w : null; };
+  const mid = Math.floor(pts.length / 2), first = half(pts.slice(0, mid)), last = half(pts.slice(pts.length - mid)), delta = last - first;
+  const nGames = pts.reduce((s, p) => s + p[2].n, 0), steady = nGames < 10 || Math.abs(delta) < Math.abs(hi - lo) * 0.12;
   const good = better === "up" ? delta > 0 : delta < 0;
   const ticks = [lo + pad, hi - pad];
-  return `<figure class="spark"><figcaption><b>${esc(title)}</b> <span class="small ${Math.abs(delta) < 1e-9 ? "muted" : good ? "up" : "down"}">${fmt(first)} → ${fmt(last)}</span></figcaption>
+  return `<figure class="spark"><figcaption><b>${esc(title)}</b> <span class="small ${steady ? "muted" : good ? "up" : "down"}" title="Average of the first half of the period vs the second half">${fmt(first)} → ${fmt(last)}${steady ? (nGames < 10 ? " · too few games for a trend" : " · no clear change") : ""}</span></figcaption>
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)} over time, from ${fmt(first)} to ${fmt(last)}">
       ${ticks.map((t) => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" class="grid"/><text x="${L - 4}" y="${Y(t) + 3}" class="ax" text-anchor="end">${fmt(t)}</text>`).join("")}
       <text x="${L}" y="${H - 6}" class="ax">${esc(rows[0].label)}</text><text x="${W - R}" y="${H - 6}" class="ax" text-anchor="end">${esc(rows[rows.length - 1].label)}</text>
@@ -1156,12 +1165,24 @@ function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
       ${pts.map(([i, y, r]) => `<g class="pt"><circle cx="${X(i)}" cy="${Y(y)}" r="4"/><circle cx="${X(i)}" cy="${Y(y)}" r="12" class="hit"><title>${esc(r.label)}: ${fmt(y)} (${r.n} game${r.n === 1 ? "" : "s"})</title></circle></g>`).join("")}
     </svg></figure>`;
 }
+function improvingSentence(rows) {
+  // first half of the games vs second half, the three things that matter most
+  const w = (a, f) => { const xs = a.filter((r) => f(r) != null); const n = xs.reduce((s, r) => s + r.n, 0); return n ? xs.reduce((s, r) => s + f(r) * r.n, 0) / n : null; };
+  const mid = Math.floor(rows.length / 2), A = rows.slice(0, mid), B = rows.slice(rows.length - mid);
+  const n = rows.reduce((s, r) => s + r.n, 0); if (n < 10 || mid < 1) return `Not enough games yet to tell (${n}): you need about 10 or more in the period.`;
+  const parts = [], good = [], bad = [];
+  const cmp = (label, f, up, thr, d = 0) => { const a = w(A, f), b = w(B, f); if (a == null || b == null) return; const diff = b - a; if (Math.abs(diff) < thr) return; ((diff > 0) === up ? good : bad).push(`${label} ${a.toFixed(d)} → ${b.toFixed(d)}`); };
+  cmp("rating", (r) => r.elo, true, 25); cmp("accuracy", (r) => r.acc, true, 1.5, 1); cmp("blunders per 100 moves", (r) => r.bl100, false, 0.5, 1); cmp("score", (r) => r.score, true, 8);
+  if (!good.length && !bad.length) return "<b>About the same:</b> no clear change between the first and the second half of the period.";
+  if (good.length) parts.push(`<b>Better</b>: ${good.join(", ")}`); if (bad.length) parts.push(`<b>Worse</b>: ${bad.join(", ")}`);
+  return `${good.length > bad.length ? "<b>Yes, you're improving.</b> " : bad.length > good.length ? "<b>Not yet.</b> " : ""}Second half of the period compared with the first: ${parts.join("; ")}.`;
+}
 function timelineHtml(games) {
   const D = timelineData(games);
   if (!D) return `<div class="card"><h2>Progress over time</h2><p class="muted small">Needs games from at least two different ${"periods"} with a date. Load games over a longer period to see your progress.</p></div>`;
   if (D.rows.length < 2) return `<div class="card"><h2>Progress over time</h2><p class="muted small">All these games are from the same ${D.weekly ? "week" : "month"}. Choose a longer period to see a trend.</p></div>`;
   const r = D.rows;
-  return `<div class="card"><h2>Progress over time</h2><p class="small muted" style="margin-top:-6px">Per ${D.weekly ? "week" : "month"}, ${r.length} points. Hover or tap a point for its value and number of games; points with few games jump around more.</p>
+  return `<div class="card"><h2>Progress over time</h2><p>${improvingSentence(r)}</p><p class="small muted">Per ${D.weekly ? "week" : "month"}, ${r.length} points. The numbers next to each title compare the first half of the period with the second half. Hover or tap a point for its value and number of games; points with few games jump around more.</p>
     <div class="sparks">${[
       sparkHtml(r, (x) => x.elo, { title: "Rating (from your games)", better: "up" }),
       sparkHtml(r, (x) => x.score, { title: "Score", unit: "%", better: "up" }),
@@ -1169,6 +1190,7 @@ function timelineHtml(games) {
       sparkHtml(r, (x) => x.cpl, { title: "Centipawn loss (lower is better)", better: "down" }),
       sparkHtml(r, (x) => x.bl100, { title: "Blunders per 100 moves (lower is better)", digits: 1, better: "down" }),
     ].join("")}</div>
+    <div class="small" id="sparkTip" aria-live="polite"></div>
     <details class="small"><summary>Show as a table</summary><div class="scroll"><table><tr><th>${D.weekly ? "Week" : "Month"}</th><th>Games</th><th>Rating</th><th>Score</th><th>Accuracy</th><th>CPL</th><th>Blunders/100</th></tr>
       ${r.map((x) => `<tr><td>${esc(x.label)}</td><td>${x.n}</td><td>${x.elo ? Math.round(x.elo) : "–"}</td><td>${x.score}%</td><td>${x.acc != null ? x.acc.toFixed(1) : "–"}</td><td>${x.cpl != null ? Math.round(x.cpl) : "–"}</td><td>${x.bl100 != null ? x.bl100.toFixed(1) : "–"}</td></tr>`).join("")}</table></div></details></div>`;
 }
@@ -1214,9 +1236,18 @@ function gameDetailHtml(g, dt, resW) {
       <div class="stat"><div class="v">${g.pst?.me ? Math.round(Object.values(g.pst.me).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.me).reduce((a, r) => a + r[0], 0))) : "–"}</div><div class="l">centipawn loss${g.pst?.opp ? ` · opponent ${Math.round(Object.values(g.pst.opp).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.opp).reduce((a, r) => a + r[0], 0)))}` : ""}</div></div>
       <div class="stat"><div class="v">${ser.length}</div><div class="l">mistakes + blunders</div></div></div>
     ${g.san ? `<div class="gd2"><div><div id="gdBoard"></div><div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary small" id="gdStart">⏮</button><button class="btn secondary small" id="gdBack">◀</button><button class="btn secondary small" id="gdFwd">▶</button><button class="btn secondary small" id="gdEnd">⏭</button><button class="btn secondary small" id="gdBoardOpen">Open on Board</button></div></div>
-      <div><div class="small muted">Tap a move to see the position. <span style="color:var(--bad);font-weight:700">Red</span> = blunder, <span style="color:#b5651d;font-weight:650">orange</span> = mistake, <span style="text-decoration:underline dotted">dotted</span> = inaccuracy.</div><div class="gdmoves" id="gdMoves"></div><div id="gdNote" class="small" style="margin-top:8px"></div></div></div>`
+      <div><div id="gdGraph" class="evgraph" title="Evaluation through the game; tap to jump"></div><div class="small muted">Tap a move (or the graph) to see the position; arrow keys work too. <span style="color:var(--bad);font-weight:700">Red</span> = blunder, <span style="color:#b5651d;font-weight:650">orange</span> = mistake, <span style="text-decoration:underline dotted">dotted</span> = inaccuracy.</div><div class="gdmoves" id="gdMoves"></div><div id="gdNote" class="small" style="margin-top:8px"></div></div></div>`
       : `<p class="small muted">The full move list is kept for games analysed from v33 on. For this game, open the mistakes below.</p>`}
     ${ser.length ? `<h3>Mistakes and blunders</h3>${ser.map((e) => `<div class="list-item weak errrow"><div><b>Move ${e.moveNo}: ${esc(e.played)}</b> <span class="muted">best was</span> <b>${esc(e.best || "?")}</b> <span class="pill ${e.label}">${e.label} −${Math.round(e.drop)}%</span><div class="small muted">${esc(PH_NAME[e.phase] || e.phase || "")}${(e.tags || []).length ? ` · ${esc(e.tags.join(", "))}` : ""}</div></div><button class="btn secondary small" data-errfen="${esc(e.fen)}">Open on board</button></div>`).join("")}` : `<p class="small">No mistakes or blunders in this game.</p>`}</div>`;
+}
+// the evaluation through the game from the player's side (+ = good for you), with your mistakes as dots
+function evalGraphSvg(ev, color, errAt) {
+  const W = 300, H = 70, n = ev.length, s = color === "w" ? 1 : -1;
+  const y = (cp) => { const w = 2 / (1 + Math.exp(-0.00368208 * s * cp)) - 1; return (H / 2) * (1 - w); };
+  const x = (k) => (k / Math.max(1, n - 1)) * W;
+  const pts = ev.map((cp, k) => `${x(k).toFixed(1)},${y(cp).toFixed(1)}`).join(" ");
+  const dots = Object.entries(errAt).filter(([, e]) => e.label !== "inaccuracy").map(([k, e]) => `<circle cx="${x(+k + 1)}" cy="${y(ev[+k + 1] ?? 0)}" r="3" class="${e.label}"><title>${e.played}: ${e.label}</title></circle>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"><rect x="0" y="0" width="${W}" height="${H / 2}" class="up"/><line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" class="mid"/><polyline points="${pts}" class="evl"/>${dots}<g class="curline"><line x1="0" x2="0" y1="0" y2="${H}"/></g></svg>`;
 }
 function bindGameDetail(v, g) {
   $("#gdClose", v).onclick = () => go("mygames");
@@ -1225,16 +1256,27 @@ function bindGameDetail(v, g) {
   const brd = new Board($("#gdBoard", v), { interactive: false }); brd.setOrientation(g.color);
   const fens = [new Chess().fen()], lasts = [null]; const c = new Chess();
   for (const s of g.san) { try { const m = c.move(s); fens.push(c.fen()); lasts.push([m.from, m.to]); } catch { break; } }
-  const errAt = {}; for (const e of g.errors) { const ply = (e.moveNo - 1) * 2 + (e.color === "w" ? 0 : 1); errAt[ply] = e; }
+  const errAt = {}; for (const e of g.errors) { const ply = e.ply ?? (e.moveNo - 1) * 2 + (g.color === "w" ? 0 : 1); errAt[ply] = e; }
   let i = 0;
   const box = $("#gdMoves", v);
   box.innerHTML = g.san.map((s, k) => `${k % 2 === 0 ? `<span class="mn">${k / 2 + 1}.</span>` : ""}<button class="mv ${errAt[k] ? errAt[k].label : ""}" data-ply="${k + 1}">${esc(s)}</button>`).join(" ");
+  const graph = $("#gdGraph", v);
+  if (graph && g.ev) graph.innerHTML = evalGraphSvg(g.ev, g.color, errAt);
   const show = () => { brd.setFen(fens[i], { last: lasts[i] }); box.querySelectorAll(".mv").forEach((b) => b.classList.toggle("cur", +b.dataset.ply === i));
-    const e = errAt[i - 1]; $("#gdNote", v).innerHTML = e ? `<div class="feedback ${e.label === "inaccuracy" ? "info" : "warn"}"><b>${esc(e.played)}</b> was ${e.label === "inaccuracy" ? "an" : "a"} ${e.label} (−${Math.round(e.drop)}% win chance). Better was <b>${esc(e.best || "?")}</b>${e.bestLine ? `: ${esc(e.bestLine)}` : ""}.</div>` : ""; };
+    const nextErr = errAt[i]; // at the position before your mistake: show the better move as an arrow
+    if (nextErr && nextErr.best) { try { const mm = new Chess(fens[i]).move(nextErr.best); brd.setArrows([{ from: mm.from, to: mm.to }]); } catch {} }
+    graph?.querySelector(".curline")?.setAttribute("transform", `translate(${(i / Math.max(1, fens.length - 1)) * 300},0)`);
+    const evTxt = g.ev && g.ev[i] != null ? `<div class="small muted">Stockfish: ${Math.abs(g.ev[i]) >= 1500 ? (g.ev[i] > 0 ? "White is winning" : "Black is winning") : `${g.ev[i] > 0 ? "+" : ""}${(g.ev[i] / 100).toFixed(1)} (${Math.abs(g.ev[i]) < 70 ? "about equal" : (g.ev[i] > 0) === (g.color === "w") ? "better for you" : "better for your opponent"})`}${nextErr && nextErr.best ? ` · here you played <b>${esc(nextErr.played)}</b>; the arrow shows <b>${esc(nextErr.best)}</b>` : ""}</div>` : "";
+    const e = errAt[i - 1]; $("#gdNote", v).innerHTML = evTxt + (e ? `<div class="feedback ${e.label === "inaccuracy" ? "info" : "warn"}"><b>${esc(e.played)}</b> was ${e.label === "inaccuracy" ? "an" : "a"} ${e.label} (−${Math.round(e.drop)}% win chance). Better was <b>${esc(e.best || "?")}</b>${e.bestLine ? `: ${esc(e.bestLine)}` : ""}.</div>` : ""); };
   box.querySelectorAll(".mv").forEach((b) => (b.onclick = () => { i = +b.dataset.ply; show(); }));
   $("#gdStart", v).onclick = () => { i = 0; show(); }; $("#gdEnd", v).onclick = () => { i = fens.length - 1; show(); };
   $("#gdBack", v).onclick = () => { i = Math.max(0, i - 1); show(); }; $("#gdFwd", v).onclick = () => { i = Math.min(fens.length - 1, i + 1); show(); };
-  $("#gdBoardOpen", v).onclick = () => go("board", { fen: fens[i] });
+  $("#gdBoardOpen", v).onclick = () => go("board", { fen: fens[i], note: `From your game vs ${(g.color === "w" ? g.black : g.white) || "?"}, after move ${Math.ceil(i / 2)}` });
+  if (graph) graph.onclick = (ev) => { const r = graph.getBoundingClientRect(); i = Math.max(0, Math.min(fens.length - 1, Math.round(((ev.clientX - r.left) / r.width) * (fens.length - 1)))); show(); };
+  // arrow keys step through the game (desktop)
+  const key = (ev) => { if (!document.body.contains(box)) return removeEventListener("keydown", key); if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) return;
+    if (ev.key === "ArrowRight") { i = Math.min(fens.length - 1, i + 1); show(); ev.preventDefault(); } else if (ev.key === "ArrowLeft") { i = Math.max(0, i - 1); show(); ev.preventDefault(); } };
+  addEventListener("keydown", key);
   show();
 }
 
@@ -1343,6 +1385,8 @@ function board(v, arg) {
   const startFen = arg?.fen || new Chess().fen();
   brd.setFen(startFen); brd.setOrientation(startFen.split(" ")[1]);
   thinkSheet($("#sheet"), () => brd.fen(), { note: arg?.note || null, source: "board" });
+  // opened from another page with a position: a way back to it
+  if (arg?.fen && prevNav && prevNav.t !== "board") { const b = document.createElement("button"); b.className = "btn secondary small"; b.style.marginBottom = "8px"; b.textContent = `← Back to ${TITLES[prevNav.t] || prevNav.t}`; const back = prevNav; b.onclick = () => go(back.t, back.arg); v.prepend(b); }
   let readOpen = false;
   const drawRead = () => { if (readOpen) $("#readOut").innerHTML = readerHtml(brd.fen()); };
   $("#readBtn").onclick = () => { readOpen = !readOpen; $("#readBtn").textContent = readOpen ? "Hide reading" : "Read the position"; $("#readOut").innerHTML = readOpen ? readerHtml(brd.fen()) : ""; };

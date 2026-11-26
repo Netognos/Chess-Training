@@ -42,12 +42,26 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
   const bestCp = lineToCp(top.find((l) => l.pv[0] === best) || top[0]);
   // 2. what the move does
   const before = attackedSet(root, me), after = attackedSet(c1, me);
-  const newly = [...after].filter((s) => !before.has(s)).map((s) => ({ ...c1.get(s), square: s })).filter((p) => p.type !== "p");
-  if (m.san.includes("+")) { facts.push(`${m.san} gives check.`); concepts.add("check"); }
-  if (newly.length >= 2) { facts.push(`${m.san} attacks two pieces at once: the ${newly.map((p) => `${NAME[p.type]} on ${p.square}`).join(" and the ")} (a double attack).`); concepts.add("double"); if (newly.some((p) => p.type === "q")) concepts.add("queenAway"); }
+  const newAll = [...after].filter((s) => !before.has(s)).map((s) => ({ ...c1.get(s), square: s })).filter((p) => p.type !== "p");
+  // only what the moved piece itself attacks; other new attacks come from a line it opened (a discovered attack)
+  const newly = newAll.filter((p) => c1.attackers(p.square, me).includes(m.to));
+  const disc = newAll.filter((p) => !c1.attackers(p.square, me).includes(m.to) && p.type !== "k");
+  if (disc.length) { const by = c1.attackers(disc[0].square, me)[0]; facts.push(`${m.san} opens a line: your ${NAME[c1.get(by)?.type] || "piece"} on ${by} now attacks the ${NAME[disc[0].type]} on ${disc[0].square} (a discovered attack).`); concepts.add("double"); }
+  if (m.san.includes("#")) { facts.push(`${m.san} is checkmate.`); concepts.add("check"); }
+  else if (m.san.includes("+")) { facts.push(`${m.san} gives check.`); concepts.add("check"); }
+  if (newly.length >= 2 && !m.san.includes("#")) { facts.push(`${m.san} attacks ${newly.length === 2 ? "two" : newly.length} pieces at once: the ${newly.map((p) => `${NAME[p.type]} on ${p.square}`).join(" and the ")} (a double attack).`); concepts.add("double"); if (newly.some((p) => p.type === "q")) concepts.add("queenAway"); }
   else if (newly.length === 1) { facts.push(`${m.san} attacks the ${NAME[newly[0].type]} on ${newly[0].square}.`); if (newly[0].type === "q") concepts.add("queenAway"); }
   if (m.piece === "p" && !m.captured && newly.length) concepts.add("space");
-  if (m.captured) { facts.push(`${m.san} captures a ${NAME[m.captured]}.`); concepts.add("material"); }
+  if (m.captured) {
+    // does the line really win material? count it after the engine's main line (6 half-moves)
+    const mat = (c, col) => pieces(c, col).reduce((a, x) => a + (x.type === "k" ? 0 : V[x.type]), 0);
+    const bal = (c) => mat(c, me) - mat(c, opp);
+    const pvTop = (top.find((l) => l.pv[0] === best) || top[0])?.pv || [];
+    const cEnd = new Chess(fen); for (const u of pvTop.slice(0, 6)) if (!uciMove(cEnd, u)) break;
+    const gain = bal(cEnd) - bal(root);
+    facts.push(`${m.san} captures a ${NAME[m.captured]}${gain >= 1 ? `, and after the main line you are ${gain} point${gain === 1 ? "" : "s"} of material up` : gain <= -1 ? " (material comes back later in the line: the point is the position, not the material)" : " (a trade: material stays level)"}.`);
+    if (gain >= 1) concepts.add("material");
+  }
   if (["n", "b"].includes(m.piece) && ((me === "w" && m.from[1] === "1") || (me === "b" && m.from[1] === "8"))) concepts.add("development");
   // 3. opponent's best answer
   let reply = null, c2 = null;
@@ -71,10 +85,9 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
         const c3 = new Chess(c2.fen()); const f = uciMove(c3, r.pv[1]);
         if (f) {
           keyMoves.add(f.san.replace(/[+#]/g, ""));
-          const defended = pieces(c3, me).filter((p) => p.type !== "k" && p.square !== f.to && c3.attackers(p.square, me).includes(f.to) && !c2.attackers(p.square, me).length);
-          const onLine = (sq) => sq[0] === f.from[0] || sq[1] === f.from[1];
-          if (defended.length) { facts.push(`Then ${f.san} defends your ${NAME[defended[0].type]} on ${defended[0].square}.`); concepts.add("unpin"); }
-          else if (f.piece === "q" && onLine(f.from)) { facts.push(`Then ${f.san}: your queen leaves the line it was on.`); concepts.add("unpin"); }
+          // "defends" only a piece that is actually attacked and wasn't defended before
+          const defended = pieces(c3, me).filter((p) => p.type !== "k" && p.square !== f.to && c3.attackers(p.square, me).includes(f.to) && !c2.attackers(p.square, me).length && c3.attackers(p.square, opp).length);
+          if (defended.length) facts.push(`Then ${f.san} defends your ${NAME[defended[0].type]} on ${defended[0].square}, which was attacked.`);
           else facts.push(`Your follow-up in that line is ${f.san}.`);
         }
       }

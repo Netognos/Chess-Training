@@ -15,6 +15,12 @@ function materialFor(fen, color) {
   let s = 0; for (const c of fen.split(" ")[0]) { const p = c.toLowerCase(); if (VAL[p] === undefined) continue; s += (c === p ? -1 : 1) * VAL[p] * (color === "w" ? 1 : -1); }
   return s;
 }
+// material balance for `color` after playing up to n half-moves of an engine line (pv in UCI) from fen
+function balAfter(fen, pv, n, color) {
+  const c = new Chess(fen);
+  for (const u of (pv || []).slice(0, n)) { try { c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); } catch { break; } }
+  return materialFor(c.fen(), color);
+}
 function kingSquare(fen, color) { const c = new Chess(fen); for (const row of c.board()) for (const p of row) if (p && p.type === "k" && p.color === color) return p.square; return null; }
 const sqDist = (a, b) => Math.max(Math.abs(a.charCodeAt(0) - b.charCodeAt(0)), Math.abs(+a[1] - +b[1]));
 function pieceList(fen) { return fen.split(" ")[0].replace(/[\d/]/g, ""); }
@@ -279,6 +285,13 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
       if (Math.abs(evals[i].cp) >= 9000 && sign * evals[i].cp > 0) tags.push("missed mate");
     }
     if (reply && reply.captured && reply.captured !== "p" && drop >= 10) tags.push("hung material / allowed tactic");
+    // the material test: after your move the engine's line wins material from you (a tactic you allowed), or the
+    // best move's line would have won material (a tactic you missed), counted over the next 5 half-moves
+    else if (drop >= 10) {
+      const now = materialFor(g.fens[i + 1], color);
+      if (now - balAfter(g.fens[i + 1], evals[i + 1].pv, 5, color) >= 2) tags.push("hung material / allowed tactic");
+    }
+    if (!tags.includes("missed tactic / forcing move") && best && best.san !== mv.san && drop >= 10 && balAfter(fen, evals[i].pv, 5, color) - materialFor(fen, color) >= 2 && balAfter(fen, evals[i].pv, 5, color) - balAfter(g.fens[i + 1], evals[i + 1].pv, 4, color) >= 2) tags.push("missed tactic / forcing move");
     if (Math.abs(evals[i + 1].cp) >= 9000 && sign * evals[i + 1].cp < 0) tags.push("allowed mate");
     const clk = g.clocks[i];
     if (clk !== null && base && (clk < 30 || clk < 0.1 * base)) tags.push("time trouble");
@@ -302,7 +315,8 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
   if (!opening) opening = g.moves.slice(0, 6).map((m) => m.san).join(" ");
   const all = Object.values(phaseAcc).flat();
   // game accuracy exactly like Lichess: volatility-weighted mean and harmonic mean of the move accuracies, averaged
-  const gameAcc = (() => {
+  const gameAccFor = (col) => (() => {
+    const color = col;
     const W = evals.slice(0, g.fens.length).map((e) => winPct(e.cp)); if (W.length < 3) return null;
     const ws = Math.max(2, Math.min(8, Math.floor((W.length - 1) / 10)));
     const sd = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length; return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length); };
@@ -318,6 +332,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     const harm = accs.length / accs.reduce((a, x) => a + 1 / Math.max(x, 1e-3), 0);
     return +(((swa / sw) + harm) / 2).toFixed(1);
   })();
+  const gameAcc = gameAccFor(color), oppAcc = gameAccFor(color === "w" ? "b" : "w");
   const rnd = (o) => Object.fromEntries(Object.entries(o).map(([k, r]) => [k, [r[0], Math.round(r[1]), +r[2].toFixed(1), r[3], r[4], r[5]]]));
   const avg = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : null);
   return {
@@ -327,7 +342,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
     ph: score === undefined ? null : { mid: div.mid, end: div.end, mMid: div.mid !== null ? +g.fens[div.mid].split(" ")[5] : null, mEnd: div.end !== null ? +g.fens[div.end].split(" ")[5] : null, w0: wpAt(0), wMid: div.mid !== null ? wpAt(div.mid) : null, cMid: div.mid !== null ? cpAt(div.mid) : null, wEnd: div.end !== null ? wpAt(div.end) : null, cEnd: div.end !== null ? cpAt(div.end) : null, res: score * 100 },
     pst: { me: rnd(pst.me), opp: rnd(pst.opp) },
-    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), san: g.moves.map((m) => m.san), accuracy: gameAcc ?? avg(all), accMean: avg(all), usedPgnEvals, depth, movetime: opts.depth ? null : opts.movetime || 150, target: opts.depth || null,
+    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), san: g.moves.map((m) => m.san), ev: evals.slice(0, g.fens.length).map((e) => Math.max(-1500, Math.min(1500, Math.round(e.cp)))), accuracy: gameAcc ?? avg(all), accMean: avg(all), oppAccuracy: oppAcc, usedPgnEvals, depth, movetime: opts.depth ? null : opts.movetime || 150, target: opts.depth || null,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),
@@ -435,6 +450,22 @@ export function gameTime(g) {
   if (!m) return null;
   const t = Date.UTC(+m[1], +m[2] - 1, +m[3]);
   return isNaN(t) ? null : t;
+}
+
+// In plain words: what the opponent does against your move ("Qxe5 takes your queen", "Qh7 is mate")
+const PIECE_NAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+export function punishText(fen, pv) {
+  try {
+    const c = new Chess(fen); const m = c.move({ from: pv[0].slice(0, 2), to: pv[0].slice(2, 4), promotion: pv[0][4] });
+    if (c.isCheckmate()) return `your opponent plays ${m.san}, checkmate`;
+    if (m.captured && m.captured !== "p") return `your opponent plays ${m.san} and takes your ${PIECE_NAME[m.captured]}`;
+    // a check or attack now that wins something on the next move
+    if (pv[1] && pv[2]) { const m2 = c.move({ from: pv[1].slice(0, 2), to: pv[1].slice(2, 4), promotion: pv[1][4] }); const m3 = c.move({ from: pv[2].slice(0, 2), to: pv[2].slice(2, 4), promotion: pv[2][4] });
+      if (c.isCheckmate()) return `your opponent plays ${m.san}, and after ${m2.san} ${m3.san} it is checkmate`;
+      if (m3.captured && m3.captured !== "p") return `your opponent plays ${m.san}${m.san.includes("+") ? " (check)" : ""}, and after ${m2.san} wins your ${PIECE_NAME[m3.captured]} with ${m3.san}`; }
+    if (m.captured) return `your opponent plays ${m.san} and wins a pawn`;
+    return `your opponent answers ${m.san}`;
+  } catch { return ""; }
 }
 
 // ---------------------------------------------------------------- opening families

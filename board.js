@@ -136,6 +136,9 @@ export class Board {
       if (t && t.dataset.sq !== from && this.el.contains(t)) this._attempt(from, t.dataset.sq);
     };
     window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+    // a cancelled touch (scroll, system gesture) must not leave the dragged picture floating on the page
+    const cancel = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancel); ghost.remove(); if (img) img.style.opacity = 1; };
+    window.addEventListener("pointercancel", cancel);
   }
 
   async _attempt(from, to) {

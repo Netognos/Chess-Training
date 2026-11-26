@@ -65,7 +65,7 @@ export function openingsView(v, arg, C) {
     const fc = v.querySelector("#fitChip"); if (fc) fc.classList.toggle("on", filt.fit);
   };
   v.innerHTML = `<p class="muted" style="margin-top:-6px;max-width:68ch">What each opening is about, the plans that come with it, and its strong and weak sides, so you can pick what suits the way you play.${st ? ` Your player type: <b>${C.esc(st.typeName)}</b>${st.aggression != null ? `, ${st.aggression}/100 on the calm–sharp scale` : ""}.` : " Take the test or analyse your games to see which openings fit you."}</p>
-    <div class="chips">${[["all", "All"], ["w", "As White"], ["e4", "Black vs 1.e4"], ["d4", "Black vs 1.d4"]].map(([k, l]) => `<button class="chip" data-side="${k}">${l}</button>`).join("")}
+    <div class="chips">${[["all", "All"], ["w", "As White"], ["e4", "Black vs 1.e4"], ["d4", "Black vs 1.d4 / other"]].map(([k, l]) => `<button class="chip" data-side="${k}">${l}</button>`).join("")}
       ${st ? `<button class="chip" id="fitChip">Fits my style</button>` : ""}<input id="opq" placeholder="Search name, ECO or moves" style="flex:1 1 180px;border-radius:999px" value="${C.esc(filt.q)}"></div>
     <div class="oplist" id="oplist"></div>`;
   v.querySelectorAll(".chip[data-side]").forEach((c) => (c.onclick = () => { filt.side = c.dataset.side; draw(); }));
