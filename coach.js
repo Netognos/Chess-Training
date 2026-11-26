@@ -70,7 +70,11 @@ export function diagnose(A, player = {}) {
     if (o.wpAfter10 >= 55) strengths.push({ title: `Opening: ${o.name} (${side})`, evidence: `${o.games} games: win chance after the opening averages ${o.wpAfter10}%, score ${o.scorePct}%.` });
     else if (o.wpAfter10 <= 40) weaknesses.push({ key: "op-" + o.name, area: "Openings", title: `Opening problems: ${o.name} (${side})`, evidence: `${o.games} games: after the opening your win chance is only ${o.wpAfter10}% on average. Review the main line and its typical plans, or switch.` });
   }
-  for (const [t, e] of Object.entries(A.endgames || {})) if (e.games >= 3 && e.scorePct < 35)
+  // a bad score in an endgame type is only a technique problem when you lose points IN the endgame (not when you
+  // were already worse when it started) and play it less accurately than usual
+  const egLeak = !A.phases || (A.phases.contrib?.endgame?.avg ?? 0) < -2;
+  const accAll = (() => { const m = Object.values(A.phaseMoves || {}).reduce((a, b) => a + b, 0); return m ? Object.entries(A.phaseAcc).reduce((a, [k, x]) => a + x * A.phaseMoves[k], 0) / m : 100; })();
+  for (const [t, e] of Object.entries(A.endgames || {})) if (e.games >= 3 && e.scorePct < 35 && egLeak && e.acc < accAll)
     weaknesses.push({ key: "eg-" + t, area: "Endgames", title: `Weak in ${t}s`, evidence: `${e.games} games reached a ${t}, and you scored ${e.scorePct}%.`, drills: TAG_ADVICE["endgame technique"].drills, links: TAG_ADVICE["endgame technique"].links });
   const bc = A.byColor || {};
   if (bc.w && bc.b && bc.w.games >= 4 && bc.b.games >= 4 && Math.abs(bc.w.scorePct - bc.b.scorePct) >= 20) {
@@ -100,7 +104,7 @@ export function makePlan(weaknesses, hours) {
   const studyMins = mins - gameMins;
   const perArea = Object.fromEntries(keys.map((k) => [k, Math.round(studyMins * split[k] / 100 / 5) * 5]));
   const weekly = [];
-  if (gameMins) weekly.push({ what: "2 serious games (15+10 or slower)", mins: gameMins, how: "Write down your thoughts at 3 critical moments BEFORE you open the engine. Then import the games here." });
+  if (gameMins) weekly.push({ what: "Play, then look at your mistakes", mins: gameMins, how: "Write down your thoughts at 3 critical moments BEFORE you open the engine. Then import the games here." });
   const how = {
     Tactics: "Puzzles on the themes from your report (Lichess puzzle themes), plus the Puzzles tab (your own mistakes).",
     Endgames: "Endgames tab: theory positions plus playing them out against the engine. Lichess Practice.",

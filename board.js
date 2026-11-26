@@ -30,15 +30,16 @@ export class Board {
     d.innerHTML = `<div class="binfo-in" role="dialog" aria-label="Explanation">${html}<div style="margin-top:10px"><button class="btn small binfo-x">Got it</button></div></div>`;
     d.addEventListener("pointerdown", (e) => e.stopPropagation());
     d.onclick = (e) => { if (e.target === d || e.target.closest(".binfo-x")) this.hideInfo(); };
-    this.el.appendChild(d); this.infoEl = d;
+    this.el.appendChild(d); this.infoEl = d; if (this.onInfo) this.onInfo(true);
     d.querySelector(".binfo-x").focus({ preventScroll: true });
   }
-  hideInfo() { if (this.infoEl) { this.infoEl.remove(); this.infoEl = null; } }
+  hideInfo() { if (this.infoEl) { this.infoEl.remove(); this.infoEl = null; if (this.onInfo) this.onInfo(false); } }
 
   setFen(fen, { last = null } = {}) { this.chess = new Chess(fen); this.sel = null; this.last = last; this.arrows = []; this.render(); }
   fen() { return this.chess.fen(); }
   setOrientation(c) { this.orientation = c; this.render(); }
   flip() { this.setOrientation(this.orientation === "w" ? "b" : "w"); }
+  setMarks(m) { this.marks = m || null; this.render(); }
   setArrows(list) { this.arrows = list || []; this._drawArrows(); }
 
   // Apply a move programmatically (uci or {from,to,promotion}); returns chess.js move or null.
@@ -67,6 +68,7 @@ export class Board {
       const p = this.chess.get(sq);
       d.innerHTML = "";
       if (p) { const img = document.createElement("img"); img.src = IMG[p.color === "w" ? p.type.toUpperCase() : p.type]; img.draggable = false; d.appendChild(img); }
+      if (this.marks && this.marks[sq]) d.insertAdjacentHTML("beforeend", `<span class="mark ${this.marks[sq]}" aria-hidden="true">${this.marks[sq] === "star" ? "★" : ""}</span>`);
       if (targets.includes(sq)) { const dot = document.createElement("span"); dot.className = p ? "ring" : "dot"; d.appendChild(dot); }
       const r = Math.floor(i / 8), f = i % 8;
       if (f === 0) d.insertAdjacentHTML("beforeend", `<span class="coord r">${sq[1]}</span>`);
@@ -109,7 +111,7 @@ export class Board {
       if (ok) { this._attempt(this.sel, sq); return; }
     }
     if (p && p.color === this.chess.turn()) { this.sel = sq; this.render(); this._startDrag(e, sq, t); }
-    else { this.sel = null; this.render(); }
+    else { const from = this.sel, fp = from && this.chess.get(from); this.sel = null; this.render(); if (from && fp && this.onIllegal) this.onIllegal(from, sq, fp); else if (p && this.onIllegal && !from) this.onIllegal(sq, sq, p); }
   }
 
   _startDrag(e, from, cell) {
@@ -144,7 +146,7 @@ export class Board {
       this.intercept(from, to, promo); return;
     }
     const legal = this.chess.moves({ square: from, verbose: true }).filter((m) => m.to === to);
-    if (!legal.length) { this.sel = null; this.render(); return; }
+    if (!legal.length) { const p = this.chess.get(from); this.sel = null; this.render(); if (this.onIllegal && p && from !== to) this.onIllegal(from, to, p); return; }
     let promotion;
     if (legal[0].promotion) promotion = await this._askPromo(this.chess.turn());
     const before = this.chess.fen();

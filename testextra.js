@@ -43,8 +43,9 @@ export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext })
       <div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm);
   bindStrip(v, brd, "style", styleInfo);
-  const t0 = Date.now();
-  const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  let t0 = Date.now(), pausedAt = brd.infoEl ? Date.now() : null;
+  brd.onInfo = (open) => { if (open) pausedAt = Date.now(); else if (pausedAt) { t0 += Date.now() - pausedAt; pausedAt = null; } };
+  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   brd.onMove = async (mv) => {
     brd.locked = true; clearInterval(timer);
     const uci = mv.from + mv.to + (mv.promotion || "");
@@ -92,8 +93,9 @@ export async function runDeep(v, C, { it, title, onRecord, nextLabel, onNext }) 
   const inp = v.querySelector("#line");
   const lb = new LineBuilder({ board: brd, rootFen: fen, el: v.querySelector("#lbox"), esc: C.esc, maxLines: 1, onChange: () => { if (!inp.dataset.manual) inp.value = lb.mainSan(); } });
   inp.oninput = () => { if (inp.value.trim()) inp.dataset.manual = "1"; else delete inp.dataset.manual; };
-  const t0 = Date.now();
-  const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  let t0 = Date.now(), pausedAt = brd.infoEl ? Date.now() : null;
+  brd.onInfo = (open) => { if (open) pausedAt = Date.now(); else if (pausedAt) { t0 += Date.now() - pausedAt; pausedAt = null; } };
+  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   // engine already looks at the start position while you think
   C.engine().analyse(fen, { movetime: 600 }).catch(() => {});
   v.querySelector("#submit").onclick = async () => {

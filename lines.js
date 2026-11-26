@@ -26,7 +26,7 @@ export function bindStrip(v, board, kind, html) {
 export class LineBuilder {
   constructor({ board, rootFen, el, esc, onChange = () => {}, maxLines = 6 }) {
     this.board = board; this.root = rootFen; this.el = el; this.esc = esc; this.onChange = onChange; this.maxLines = maxLines;
-    this.lines = []; this.hist = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { return localStorage.getItem("chesscoach.follow2") === "1"; } catch { return false; } })();
+    this.lines = []; this.hist = []; this.cur = -1; this.cursor = 0; this.follow = (() => { try { const x = localStorage.getItem("chesscoach.follow2"); return x === null ? !!window.__ccFollowDefault : x === "1"; } catch { return false; } })(); // beginners: pieces move by default
     this.arrows = (() => { try { return localStorage.getItem("chesscoach.arrows") !== "0"; } catch { return true; } })(); this.main = 0; this.msg = "";
     board.intercept = (f, t, p) => this.move(f, t, p);
     board.targetsFor = (sq) => this.targets(sq);

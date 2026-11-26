@@ -67,11 +67,16 @@ export function perfRating(items, prior = 1500) {
   for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; const e = xs.reduce((a, x) => a + expected(x.r, mid), 0); const s = xs.reduce((a, x) => a + x.s, 0); if (e < s) lo = mid; else hi = mid; }
   return Math.round((lo + hi) / 2);
 }
-export function playerElo(p) {
-  const gs = Object.values(p.games || {}).filter((g) => g.playerElo && g.tc !== "bullet").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  if (gs.length) return Math.round(gs.slice(0, 10).reduce((a, g) => a + +g.playerElo, 0) / Math.min(10, gs.length));
-  return +p.rating || 1500;
+// The rating training is pitched at. From the games (last 10 non-bullet games with a rating, at least 5), unless the
+// player chose their own number; with no games: the stated rating, or a beginner level from the profile.
+export function ratingInfo(p) {
+  const gs = Object.values(p.games || {}).filter((g) => +g.playerElo > 0 && g.tc !== "bullet").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const games = gs.length >= 5 ? Math.round(gs.slice(0, 10).reduce((a, g) => a + +g.playerElo, 0) / Math.min(10, gs.length)) : null;
+  const stated = +p.rating || (p.level === "new" ? 500 : p.level === "rules" ? 800 : null);
+  const used = p.ratingPref === "mine" && stated ? stated : games ?? stated ?? 1000;
+  return { games, stated, used, differ: games && +p.rating && Math.abs(games - +p.rating) > 200 };
 }
+export function playerElo(p) { return ratingInfo(p).used; }
 function moveCharacter(fen, mv) {
   const c = new Chess(fen); const opp = c.turn() === "w" ? "b" : "w";
   let ek = null; for (const row of c.board()) for (const x of row) if (x && x.type === "k" && x.color === opp) ek = x.square;
@@ -88,7 +93,8 @@ export async function testView(v, C) {
   const cur = p.tests.find((t) => !t.done);
   if (!cur) {
     const last = p.tests.filter((t) => t.done).slice(-1)[0];
-    v.innerHTML = `<div class="card"><h2>Position test</h2>
+    const newbie = p.level === "new" && !(p.learn && Object.keys(p.learn).filter((k) => k !== "games" && k !== "play").length >= 10);
+    v.innerHTML = `${newbie ? `<div class="card"><div class="feedback warn">This test is for players who know the rules. New to chess? Do the lessons first (Train → Learn); come back here afterwards. <button class="btn small" id="toLearn">Learn the basics</button></div></div>` : ""}<div class="card"><h2>Position test</h2>
       <p>You get positions from real games. Find the best move, and write down <b>why</b>, and which line you calculated. The test adapts to your level, measures how far you calculate and how long you need, and compares that with your rating (${playerElo(p)}).</p>
       <ul class="small"><li><b>Tactical</b> (Lichess puzzles, rated 600-3000): attack & mate, defence, calculation, sacrifices, quiet moves, endgame. If your first move is right, you keep playing the line: that shows how deep you calculated.</li>
       <li><b>Positional</b> (puzzles selected by WGM/WIM players): initiative, prophylaxis, coordination, space, structure, technique, king safety. There is no tactic here; the question is which move fits the position.</li>
@@ -104,6 +110,7 @@ export async function testView(v, C) {
       <div class="card" id="aiCard"></div>
       <div class="card"><h2>Training modules</h2><p class="small">Practise one category at a time around your level, without a test score. Your results appear in the Log.</p>
       <div class="row">${TAC_CATS.concat(Object.keys(POS_GROUPS)).concat(Object.keys(EXTRA_CATS)).map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">${C.esc(catLabel(c))}</button>`).join("")}</div></div>`;
+    const tl = v.querySelector("#toLearn"); if (tl) tl.onclick = () => C.go("learn");
     v.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = async () => { await startTest(p, b.dataset.mode, C); C.go("test"); }));
     aiSettings(v.querySelector("#aiCard"));
     v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => C.go("practice", { cat: b.dataset.prac })));
@@ -215,7 +222,7 @@ async function gradeLine(C, fen, user, sol, deadline) {
       if (test.isCheckmate()) { own++; notes.push(`${u.san}: also mate. That works too!`); break; }
       const g = await C.gradeMove(before, u.uci, 700);
       if (g.drop < 3) { own++; onSol = false; notes.push(`${u.san}: different from the solution, but the engine finds it just as good.`); pos.move(u.san); continue; }
-      notes.push(`${u.san}: this goes wrong here (−${g.drop.toFixed(0)}% win chance). Stronger is ${g.bestLine.split(" ")[0]}.`); break;
+      notes.push(`${u.san} goes wrong here${g.punish ? `: after it, ${g.punish}` : ""}. Better was ${g.bestLine.split(" ")[0]} (your move costs ${g.drop.toFixed(0)}% chance to win).`); break;
     } else {
       const g = await C.gradeMove(before, u.uci, 500);
       if (g.drop >= 10) { notes.push(`You assumed ${u.san} for your opponent, but they have a stronger defence: ${g.bestLine.split(" ")[0]}. Your line stops being reliable here.`); break; }
@@ -273,18 +280,18 @@ async function runItem(v0, cur, C, opts) {
   const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
   const it = (pend && (await findItem(slot.kind, pend))) || (await pickItem({ items: opts.used || cur.items, est, avoid: seenBefore(C.P(), cur) }, slot));
   if (!it) { v.innerHTML = `<div class="card"><p>No more positions in this category.</p></div>`; return; }
-  if (opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
+  if (opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind, st: cur.pending?.id === it.id ? cur.pending.st : undefined }; C.save(); }
   window.__ccItem = it;
   const fen = it.fen, stm = fen.split(" ")[1];
   const sol = slot.kind === "tac" ? it.sol.split(" ") : [it.best];
   const solSan = (() => { const c = new Chess(fen); const o = []; for (const u of sol) { try { o.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } } return o; })();
   const nMine = Math.ceil(sol.length / 2);
   const themes = (it.c ? [it.c] : []).concat(it.t || it.th || []);
-  const taskTxt = slot.kind === "tac" ? "There is something concrete here: a tactic, a combination or a forced line. Put the <b>whole line</b> you see on the board (your moves and your opponent's best replies), or type it, and write down your idea in a sentence. Then press <b>Submit answer</b>. Extra lines for other defences or ideas are checked too." : "There's no direct tactic. Play the move you think is best on the board (or type it) and write down the idea or plan behind it. Other candidate moves can go in extra lines. Then press <b>Submit answer</b>.";
+  const taskTxt = "Find the best move. Put it on the board (or type it). If you see a forced line, add the whole line: your moves and your opponent's best replies. Write your idea in a sentence, then press <b>Submit answer</b>. Other candidate moves or defences can go in extra lines; they are checked too.";
   const stripTitle = opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${catLabel(opts.cat)}`;
   v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, stripTitle, stm)}<div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
     <div><div class="card"><h2 class="desk-only">${C.esc(stripTitle)}</h2>
-      <p class="small muted">${slot.kind === "tac" ? "Find the line and say why it works." : "Find the best move and the plan behind it."} <button class="linkbtn" type="button" id="tInfo2">ⓘ More</button>${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
+      <p class="small muted">Find the best move (and the line, if there is one) and say why. <button class="linkbtn" type="button" id="tInfo2">ⓘ More</button>${opts.test ? "" : ` · rating ≈ ${it.r}`}</p>
       <div class="small" style="margin:6px 0">AI coach: ${aiKey() ? "<b>on</b>" : "<b>off</b>"} · <a href="#" id="aiToggle">${aiKey() ? "settings" : "set up (free)"}</a></div><div id="aiInline" class="card hidden"></div>
       <div id="stage"></div><div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm); brd.locked = true;
@@ -298,8 +305,15 @@ async function runItem(v0, cur, C, opts) {
   let aiPromise = null, calc = null;
   const Cg = { ...C, gradeMove: (f, u, ms) => gradeWith(ceng, f, u, ms) }; window.__ccEng = ceng;
   v.querySelector("#aiToggle").onclick = (e) => { e.preventDefault(); const el = v.querySelector("#aiInline"); el.classList.toggle("hidden"); if (!el.classList.contains("hidden")) aiSettings(el); };
-  const t0 = Date.now(); let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [], sideHtml = "", sideHold = 0;
-  const timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  // a reload (phone switching apps) brings you back to the same point: elapsed time and a half-finished line are kept
+  const saved = opts.test && cur.pending && cur.pending.id === it.id ? (cur.pending.st ||= {}) : {};
+  let t0 = Date.now() - (saved.elapsed || 0) * 1000, pausedAt = null; let tSubmit = null, finished = false, depthStart = null, depthTotal = 0, stages = 0, allNotes = [], firstMove = null, character = null, ideaTxt = "", lineTxt = "", moveScore = null, lb = null, sideTxt = [], sideHtml = "", sideHold = 0;
+  // the clock stops while an explanation is open over the board
+  brd.onInfo = (open) => { if (open) pausedAt = Date.now(); else if (pausedAt) { t0 += Date.now() - pausedAt; pausedAt = null; } };
+  if (brd.infoEl) pausedAt = Date.now();
+  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    if (opts.test && !finished && s % 5 === 0 && s !== saved.elapsed) { saved.elapsed = s; C.save(); } }, 500);
+  const keep = (pre) => { if (!opts.test) return; Object.assign(saved, { pre, depthStart, depthTotal, stages, ideaTxt, lineTxt, firstMove, notes: allNotes, elapsed: Math.floor((Date.now() - t0) / 1000), tSubmit: tSubmit ? Math.round((tSubmit - t0) / 1000) : null }); C.save(); };
   const scrollFb = () => v.querySelector("#tfb").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
 
   const stepper = (lineSan, startFen) => {
@@ -377,8 +391,8 @@ async function runItem(v0, cur, C, opts) {
     const first = pre === 0;
     v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> This counts as "with help".</div>`}
       ${first ? `<label class="f" style="margin-top:6px"><b style="color:var(--ink)">Your idea: what's going on and why?</b><textarea id="why" style="min-height:60px" placeholder="E.g. 'The black king has no escape squares, so after Rxf7 there's a back-rank mate'"></textarea></label>` : ""}
-      <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${slot.kind === "tac" ? (first ? "Your line (your moves AND the opponent's replies)" : "Continue the line") : "Your move (optional: + how you continue)"}</b>
-      <input id="line" placeholder="${slot.kind === "tac" ? "e.g. Txf7 Kxf7 Dh5+ Kg8 Dxe8 (Dutch or English letters)" : "e.g. Pd2 (and then Pf1-e3)"}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${first ? "Your move, or your whole line" : "Continue the line"}</b>
+      <input id="line" placeholder="e.g. Nd2, or a line: Rxf7 Kxf7 Qh5+ Kg8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <div id="perr" class="small" style="color:var(--bad);margin-top:4px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit answer</button><button class="btn secondary" id="skip">${first ? "I don't know / skip" : "Show solution"}</button></div>`;
     const inp = v.querySelector("#line");
@@ -406,7 +420,14 @@ async function runItem(v0, cur, C, opts) {
       }
       if (first) {
         tSubmit = Date.now(); ideaTxt = v.querySelector("#why").value; lineTxt = txt; const m0 = new Chess(fen).move(parsed.moves[0].san); firstMove = m0.san; character = moveCharacter(fen, m0);
-        // the explanation + AI judge start right away (in parallel with checking your line); they judge what you saw on your own
+        startAi();
+      }
+      else lineTxt += " | " + txt;
+      return afterSubmit(parsed, first, pre, sfen);
+    };
+  };
+  // the explanation + AI judge start right away (in parallel with checking your line); they judge what you saw on your own
+  const startAi = () => {
         aiPromise = (async () => {
           let x = null, ai = null, aiErr = null;
           try { x = await explainMove(ceng, fen, sol[0], ideaTxt, lineTxt); } catch (e) { console.warn(e); }
@@ -420,8 +441,8 @@ async function runItem(v0, cur, C, opts) {
           }
           return { x, ai, aiErr };
         })();
-      }
-      else lineTxt += " | " + txt;
+  };
+  const afterSubmit = async (parsed, first, pre, sfen) => {
       v.querySelector("#submit").disabled = true; v.querySelector("#tfb").innerHTML = `<div class="feedback info">Stockfish is checking your line…</div>`; scrollFb();
       stages++;
       if (slot.kind === "pos") {
@@ -441,10 +462,15 @@ async function runItem(v0, cur, C, opts) {
       if (gotOwn === 0 && first) { if (parsed.moves.length > 2) await runCalc(parsed.moves); return finish(calc && calc.accurate >= 2 ? "Your first move isn't right, but part of your calculation was." : "Your first move isn't right."); }
       if (!gl.onSol || gotOwn === 0) return finish(first ? `Partly: ${gotOwn} of ${nMine} moves sound.` : `With help you got to ${depthTotal} of ${nMine}.`);
       // continue from the position after the correct moves + the opponent's reply
+      keep(pre + gotOwn * 2);
       stage(pre + gotOwn * 2);
-    };
   };
-  stage(0);
+  if (saved.pre > 0 && slot.kind === "tac") { // restore a half-finished line after a reload
+    ({ depthStart, depthTotal, stages, ideaTxt, lineTxt, firstMove } = saved); allNotes = saved.notes || [];
+    if (saved.tSubmit != null) tSubmit = t0 + saved.tSubmit * 1000;
+    try { character = moveCharacter(fen, new Chess(fen).move(firstMove)); } catch {}
+    startAi(); stage(saved.pre);
+  } else stage(0);
 }
 
 // ------------------------------------------------------------------ PRACTICE (training modules)
@@ -667,6 +693,7 @@ export function currentStyle(p, C) {
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
   if (!t && !A) return null;
+  if (!t && gs.length < 15) return null; // too early to tell from a handful of games (and no test)
   const R = t ? computeResult(p, t, A) : null;
   const type = R ? R.type : guessTypeFromGames(A);
   return { type, typeName: PLAYER_TYPES[type].name, aggression: R ? R.aggression : A?.style?.aggression ?? null, fromTest: !!R, A };

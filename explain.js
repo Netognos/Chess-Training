@@ -106,15 +106,18 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
       if (bcp - aft < 100 || !rr?.pv[0]) continue;
       seen.add(cap.san);
       const t2 = new Chess(t.fen()); const ref = uciMove(t2, rr.pv[0]);
-      let why = `After ${rp.san}${rp.user ? " (the move you expected)" : ""}, ${cap.san}${bcp - aft >= 250 ? "? looks tempting but fails" : " is possible but weaker"}: ${ref.san}${ref.captured ? ` takes your ${NAME[ref.captured]}` : ""} (${fmt(aft)} instead of ${fmt(bcp)}).`;
+      let why = `Later in the line, after ${rp.san}${rp.user ? " (the reply you expected)" : ""}: ${cap.san}${bcp - aft >= 250 ? "? looks tempting but fails" : " is possible but weaker"}: ${ref.san}${ref.captured ? (V[cap.captured] >= V[ref.captured] && ref.to === cap.to ? ` takes back (a trade), and then the position is worse for you` : ` takes your ${NAME[ref.captured]}`) : ""} (${fmt(aft)} instead of ${fmt(bcp)}).`;
       const v = cap.from;
-      if (ref.captured && (ref.from[0] === v[0] || ref.from[1] === v[1] || Math.abs(ref.from.charCodeAt(0) - v.charCodeAt(0)) === Math.abs(+ref.from[1] - +v[1]))) {
+      // only a real line: the square the piece left lies strictly between the attacker and what it now takes
+      const between = (a, b, x) => { const fx = a.charCodeAt(0), fy = +a[1], tx = b.charCodeAt(0), ty = +b[1], xx = x.charCodeAt(0), xy = +x[1];
+        const dx = Math.sign(tx - fx), dy = Math.sign(ty - fy); if (!(fx === tx || fy === ty || Math.abs(tx - fx) === Math.abs(ty - fy))) return false;
+        for (let cx = fx + dx, cy = fy + dy; cx !== tx || cy !== ty; cx += dx, cy += dy) if (cx === xx && cy === xy) return true; return false; };
+      if (ref.captured && ref.to !== cap.to && "qrb".includes(ref.piece) && between(ref.from, ref.to, v)) {
         why += ` Your ${NAME[cap.piece]} on ${v} was blocking that line, so capturing opens it. First defend or move the piece behind it.`; concepts.add("pin");
       }
       tempting.push(why); keyMoves.add(ref.san.replace(/[+#]/g, ""));
     }
   }
-  if (tempting.length) concepts.add("unpin");
   // 5. alternatives
   const alts = top.filter((l, i, all) => l.pv[0] && l.pv[0] !== best && all.findIndex((o) => o.pv[0] === l.pv[0]) === i).map((l) => ({ san: new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san, cp: lineToCp(l) }));
 

@@ -148,8 +148,7 @@ const pieceOf = (san) => (/^[KQRBN]/.test(san || "") ? san[0] : /^O-O/.test(san 
 const pct = (n, t) => (t ? Math.round((100 * n) / t) : 0);
 
 // everything you need for one theme, from the stored games
-export function themeData(p, key) {
-  const games = Object.values(p.games || {});
+export function themeData(p, key, games = Object.values(p.games || {})) {
   const errs = [];
   for (const g of games) for (const e of g.errors || []) if ((e.label === "mistake" || e.label === "blunder") && themeOf(e) === key) errs.push({ ...e, g });
   const all = games.reduce((a, g) => a + (g.errors || []).filter((e) => e.label === "mistake" || e.label === "blunder").length, 0);
@@ -217,8 +216,8 @@ export function explain(e) {
   return out;
 }
 
-export function deepDiveHtml(p, key, esc, elo) {
-  const T = THEMES[key], D = themeData(p, key);
+export function deepDiveHtml(p, key, esc, elo, games) {
+  const T = THEMES[key], D = themeData(p, key, games);
   const pats = patterns(key, D);
   const fit = (lo, hi) => elo >= lo - 100 && elo <= hi + 100;
   const books = T.books.filter(([, , lo, hi]) => fit(lo, hi));

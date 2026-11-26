@@ -260,7 +260,9 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
       if (i + 2 < g.fens.length) {
         const lost = materialFor(fen, color) - materialFor(g.fens[i + 2], color);
         const lost2 = i + 4 < g.fens.length ? materialFor(fen, color) - materialFor(g.fens[i + 4], color) : lost;
-        if (lost >= 2 && lost2 >= 2 && !g.moves[i].promotion) { if (wpB - wpA < 5) st.sacSound++; else if (wpB - wpA >= 10) st.sacUnsound++; }
+        // a sacrifice: the moved piece is taken at once, material stays down, in a position that wasn't decided yet
+        const takenAtOnce = g.moves[i + 1] && g.moves[i + 1].captured && g.moves[i + 1].to === m.to;
+        if (lost >= 2 && lost2 >= 2 && !g.moves[i].promotion && takenAtOnce && wpB > 15 && wpB < 85) { if (wpB - wpA < 5) st.sacSound++; else if (wpB - wpA >= 10) st.sacUnsound++; }
       }
       st.acc[cpB >= 150 ? "ahead" : cpB <= -150 ? "behind" : "equal"].push(macc);
     }
@@ -294,8 +296,28 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     const slug = decodeURIComponent(H.ECOUrl.split("/").pop() || "").replace(/-\d+\..*$/, "").replace(/-/g, " ").trim();
     if (slug) opening = slug.replace(/\bDefense\b/, "Defense").replace(/\s+/g, " ");
   }
+  if (!opening && opts.book) { // no name in the PGN: the deepest position of the game that the opening book knows
+    for (let i = Math.min(g.fens.length - 1, 30); i >= 1; i--) { const b = opts.book[g.fens[i].split(" ").slice(0, 4).join(" ")]; if (b && b[1]) { opening = b[1]; break; } }
+  }
   if (!opening) opening = g.moves.slice(0, 6).map((m) => m.san).join(" ");
   const all = Object.values(phaseAcc).flat();
+  // game accuracy exactly like Lichess: volatility-weighted mean and harmonic mean of the move accuracies, averaged
+  const gameAcc = (() => {
+    const W = evals.slice(0, g.fens.length).map((e) => winPct(e.cp)); if (W.length < 3) return null;
+    const ws = Math.max(2, Math.min(8, Math.floor((W.length - 1) / 10)));
+    const sd = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length; return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length); };
+    const wins = []; for (let k = 0; k < ws - 2; k++) wins.push(W.slice(0, ws)); for (let k = 0; k + ws <= W.length; k++) wins.push(W.slice(k, k + ws));
+    const weights = wins.map((x) => Math.max(0.5, Math.min(12, sd(x))));
+    let sw = 0, swa = 0; const accs = [];
+    for (let k = 0; k + 1 < W.length && k < weights.length; k++) {
+      if (!g.moves[k] || g.moves[k].color !== color) continue;
+      const pb = color === "w" ? W[k] : 100 - W[k], pa = color === "w" ? W[k + 1] : 100 - W[k + 1];
+      const acc = moveAccuracy(pb, pa); accs.push(acc); sw += weights[k]; swa += acc * weights[k];
+    }
+    if (!accs.length) return null;
+    const harm = accs.length / accs.reduce((a, x) => a + 1 / Math.max(x, 1e-3), 0);
+    return +(((swa / sw) + harm) / 2).toFixed(1);
+  })();
   const rnd = (o) => Object.fromEntries(Object.entries(o).map(([k, r]) => [k, [r[0], Math.round(r[1]), +r[2].toFixed(1), r[3], r[4], r[5]]]));
   const avg = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : null);
   return {
@@ -305,7 +327,7 @@ export async function analyseGame(engine, pgn, player, opts = {}, onPos) {
     timeControl: H.TimeControl || "", tc: tcCategory(H.TimeControl, H.Site), termination: H.Termination || "", opening, eco: H.ECO || "",
     ph: score === undefined ? null : { mid: div.mid, end: div.end, mMid: div.mid !== null ? +g.fens[div.mid].split(" ")[5] : null, mEnd: div.end !== null ? +g.fens[div.end].split(" ")[5] : null, w0: wpAt(0), wMid: div.mid !== null ? wpAt(div.mid) : null, cMid: div.mid !== null ? cpAt(div.mid) : null, wEnd: div.end !== null ? wpAt(div.end) : null, cEnd: div.end !== null ? cpAt(div.end) : null, res: score * 100 },
     pst: { me: rnd(pst.me), opp: rnd(pst.opp) },
-    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), accuracy: avg(all), usedPgnEvals, depth, movetime: opts.depth ? null : opts.movetime || 150, target: opts.depth || null,
+    plies: g.moves.length, line: g.moves.slice(0, 30).map((m) => m.lan), san: g.moves.map((m) => m.san), accuracy: gameAcc ?? avg(all), accMean: avg(all), usedPgnEvals, depth, movetime: opts.depth ? null : opts.movetime || 150, target: opts.depth || null,
     phaseAcc: Object.fromEntries(Object.entries(phaseAcc).filter(([, v]) => v.length).map(([k, v]) => [k, avg(v)])),
     phaseMoves: Object.fromEntries(Object.entries(phaseAcc).map(([k, v]) => [k, v.length])),
     wpAfterOpening: wpAfterOpening === null ? null : +wpAfterOpening.toFixed(1),
@@ -405,6 +427,14 @@ export function errorMatrix(serious, nGames) {
     c.ex = c.ex.sort((a, b) => b.drop - a.drop).slice(0, 3).map((e) => ({ moveNo: e.moveNo, color: e.color, played: e.played, best: e.best, drop: e.drop, label: e.label, fen: e.fen, game: e.game, opening: e.opening, tags: e.tags }));
   }
   return M;
+}
+
+// game date → ms (PGN "2026.03.04", ISO, or unknown "????.??.??" → null)
+export function gameTime(g) {
+  const m = /(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/.exec(g?.date || "");
+  if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  return isNaN(t) ? null : t;
 }
 
 // ---------------------------------------------------------------- opening families

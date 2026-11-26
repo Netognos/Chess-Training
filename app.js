@@ -1,7 +1,7 @@
 import { Chess } from "./vendor/chess.js";
 import { Engine, lineToCp, winPct, fmtScore } from "./engine.js";
 import { Board } from "./board.js";
-import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES } from "./analysis.js";
+import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES, gameTime } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
@@ -9,9 +9,10 @@ import { probe, testingMove, gradeTB, moveScore } from "./tb.js";
 import { mountExplorer, lichessToken, setLichessToken } from "./explorer.js";
 import { familyTableHtml, bindFamilyTable } from "./openingtable.js";
 import { THEMES, themeData, deepDiveHtml, themeOf } from "./deepdive.js";
+import { learnView, LESSONS } from "./learn.js";
 import { LineBuilder, checkLine, sideReport, sideReportHtml, fmt as fmtLine } from "./lines.js";
 import { explainMove, explainHtml } from "./explain.js";
-import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, aiSettings, currentStyle, testSummary } from "./test.js";
+import { testView, resultsView, profileView, practiceView, TAC_CATS, POS_GROUPS, playerElo, ratingInfo, aiSettings, currentStyle, testSummary } from "./test.js";
 import { openingsView, repertoireView } from "./openingsview.js";
 
 // ------------------------------------------------------------------ state
@@ -80,7 +81,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.re
 function logEvent(type, text) { const p = P(); if (!p) return; p.log.unshift({ date: new Date().toISOString(), type, text }); save(); }
 function newPlayer(d) {
   const id = "p" + Date.now().toString(36);
-  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4,
+  S.players[id] = { id, name: d.name, lichess: d.lichess || "", chesscom: d.chesscom || "", pgnName: d.pgnName || "", rating: d.rating || "", goal: d.goal || "", hours: +d.hours || 4, level: d.level || "", tcs: d.tcs || [],
     createdAt: today(), games: {}, reports: [], puzzles: {}, endgames: {}, customEndgames: [], notebook: [], log: [], nextSteps: [], repertoire: { white: "", vsE4: "", vsD4: "", notes: "" }, settings: { movetime: 150 } };
   S.current = id; save(); return id;
 }
@@ -99,29 +100,33 @@ const ICONS = {
 const icon = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
 const SECTIONS = {
   home: { label: "Home", tabs: [["home", "Overview"], ["account", "Profile"], ["log", "Log & backup"]] },
-  analyse: { label: "Analyse", tabs: [["games", "Games"], ["report", "Report"], ["compare", "Compare"]] },
-  train: { label: "Train", tabs: [["training", "Plan"], ["weak", "Weak points"], ["puzzles", "Puzzles"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
-  test: { label: "Test", tabs: [["test", "Test"], ["results", "Results"], ["profile", "Player profile"], ["practice", "Modules"]] },
+  analyse: { label: "Analyse", tabs: [["games", "Load games"], ["mygames", "My games"], ["report", "Report"], ["compare", "Compare"]] },
+  train: { label: "Train", tabs: [["learn", "Learn"], ["training", "Plan"], ["weak", "Weak points"], ["puzzles", "Puzzles"], ["practice", "Modules"], ["endgames", "Endgames"], ["board", "Board"], ["notebook", "Notebook"]] },
+  test: { label: "Test", tabs: [["test", "Test"], ["results", "Results"], ["profile", "Player profile"]] },
   openings: { label: "Openings", tabs: [["openings", "Library"], ["repertoire", "My repertoire"]] },
 };
-const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Your games", report: "Report", compare: "Compare players", weak: "Weak points in depth", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
+const TITLES = { home: "", account: "Profile", log: "Log & backup", games: "Load games", mygames: "My games", report: "Report", compare: "Compare players", weak: "Weak points in depth", learn: "Learn chess", training: "Training plan", puzzles: "Puzzles from your games", endgames: "Endgames",
   board: "Analysis board", notebook: "Notebook", test: "Thinking test", results: "Test results", profile: "Player profile", practice: "Training modules", openings: "Opening library", repertoire: "My repertoire" };
 const OC = () => ({ ...C, style: () => currentStyle(P(), C), Board, icon });
 const C = { gen: () => viewGen, P: () => P(), save: () => save(), go: (t, a) => go(t, a), esc, toast, today, logEvent, copy: (t) => copy(t), gradeMove: (...a) => gradeMove(...a), aggregate, engine: () => getEngine() };
-const views = { home, account, games, report, compare, weak, training, puzzles, endgames, board, notebook, log,
+const views = { home, account, games, mygames, report, compare, weak, training, puzzles, endgames, board, notebook, log,
   openings: (v, arg) => openingsView(v, arg, OC()), repertoire: (v) => repertoireView(v, OC()),
-  test: (v) => testView(v, C), results: (v, a) => resultsView(v, C, a), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
+  learn: (v, arg) => learnView(v, arg, C), test: (v) => testView(v, C), results: (v, a) => resultsView(v, C, a), profile: (v) => profileView(v, C), practice: (v, arg) => practiceView(v, arg, C) };
 let tab = "home";
 const sectionOf = (t) => Object.keys(SECTIONS).find((k) => SECTIONS[k].tabs.some(([x]) => x === t)) || "home";
 const lastTab = {};
 function renderNav() {
   const sec = sectionOf(tab); lastTab[sec] = tab;
   $("#sections").innerHTML = Object.entries(SECTIONS).map(([k, s]) => `<button data-sec="${k}" class="${k === sec ? "active" : ""}" ${k === sec ? 'aria-current="page"' : ""}>${icon(k)}<span>${s.label}</span></button>`).join("");
-  document.querySelectorAll("#sections button").forEach((b) => (b.onclick = () => go(lastTab[b.dataset.sec] || SECTIONS[b.dataset.sec].tabs[0][0])));
+  const firstTab = (k) => (k === "train" && P()?.level !== "new" ? "training" : SECTIONS[k].tabs[0][0]);
+  document.querySelectorAll("#sections button").forEach((b) => (b.onclick = () => go(lastTab[b.dataset.sec] || firstTab(b.dataset.sec))));
   const tabs = SECTIONS[sec].tabs;
   $("#tabs").innerHTML = tabs.length > 1 ? tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? "active" : ""}">${l}</button>`).join("") : "";
   document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => go(b.dataset.tab)));
   $("#pageTitle").textContent = TITLES[tab] ?? "";
+  // more tabs than fit: fade the edge that has more, and keep the active tab in view
+  const T = $("#tabs"), edge = () => { T.classList.toggle("more-r", T.scrollLeft + T.clientWidth < T.scrollWidth - 4); T.classList.toggle("more-l", T.scrollLeft > 4); };
+  T.onscroll = edge; const a = T.querySelector(".active"); if (a) a.scrollIntoView({ block: "nearest", inline: "nearest" }); edge();
 }
 window.__ccGo = (t, a) => go(t, a);
 window.__ccFetch = (opts) => fetchGames(P(), opts, () => {});
@@ -134,6 +139,7 @@ function measureBars() {
 if (window.ResizeObserver) { const ro = new ResizeObserver(measureBars); ro.observe($(".topbar")); ro.observe($("#tabs")); }
 window.addEventListener("resize", measureBars);
 function go(t, arg) {
+  window.__ccFollowDefault = ["new", "rules"].includes(P()?.level);
   tab = t;
   const v = $("#view"); v.innerHTML = "";
   if (!P() && t !== "home" && t !== "openings") { tab = "home"; renderNav(); home(v); return renderPicker(); }
@@ -169,10 +175,11 @@ function home(v) {
   const p = P();
   if (!p) {
     v.innerHTML = `<div class="card"><h2>${Object.keys(S.players).length ? "New player" : "Welcome to Chess Coach"}</h2>
-      <p class="muted">Each player gets their own profile, analysis, training plan and log. Fill in at least a name. The usernames let the app download your games.</p>
+      <p>${Object.keys(S.players).length ? "" : "<b>Find out why you lose, and train exactly that.</b> "}Chess Coach looks at your own games, finds the mistakes that cost you the most and turns them into training. New to chess? It starts with the rules.</p>
       ${profileForm({})}<div class="row" style="margin-top:12px"><button class="btn" id="create">Create player</button></div></div>
       <div class="card"><h2>How it works</h2><ol>
-      <li><b>Games</b>: load the last months of your Lichess and/or Chess.com games (at least 10+0) and analyse them with Stockfish.</li>
+      <li><b>Learn</b>: new to chess? Short lessons on how the pieces move, check and mate, with exercises, then games against an easy computer.</li>
+      <li><b>Games</b>: load your Lichess and/or Chess.com games (bullet, blitz, rapid or slower: you choose) and let Stockfish analyse them.</li>
       <li><b>Test & profile</b> (second part): a test with positions where you give your move and the reason why. It measures calculation depth, time and style, and works out your player type, the openings that fit you and your work points.</li>
       <li><b>Report</b>: your strengths, weaknesses and a weekly training plan.</li>
       <li><b>Puzzles</b>: your own mistakes as puzzles, repeated at spaced intervals.</li>
@@ -180,7 +187,8 @@ function home(v) {
       <li><b>Board</b>: analyse any position, play on against the engine, or copy it to ask Claude about the plan.</li>
       <li><b>Notebook</b>: your own thoughts and candidate moves per position, checked by the engine.</li>
       <li><b>Log</b>: what you've done and the next steps, plus backup and export.</li></ol></div>`;
-    $("#create").onclick = () => { const d = readProfile(v); if (!d.name) return toast("Fill in a name"); newPlayer(d); logEvent("profile", "Player created"); go("home"); };
+    bindProfileForm(v);
+    $("#create").onclick = () => { const d = readProfile(v); if (!d.name) return toast("Fill in a name"); if (!d.level) return toast("Choose your level"); newPlayer(d); logEvent("profile", "Player created"); go("home"); };
     return;
   }
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
@@ -189,22 +197,28 @@ function home(v) {
   const nG = Object.keys(p.games).length;
   const tests = (p.tests || []).filter((t) => t.done);
   const st = currentStyle(p, C);
-  const stepsDef = [["Profile", !!p.name, "account"], ["Accounts", !!(p.lichess || p.chesscom), "account"], ["Load games", nG > 0, "games"], ["Report", (p.reports || []).length > 0, "report"], ["Training", Object.keys(p.practice || {}).length > 0 || Object.values(p.puzzles).some((x) => x.attempts), "training"], ["Test", tests.length > 0, "test"]];
+  const stepsDef = p.level === "new" ? [["Profile", !!p.name, "account"], ["Learn the rules", LESSONS.every((l) => (p.learn || {})[l.id]), "learn"], ["Play the computer", ((p.learn || {}).games || []).length > 0, "learn"], ["Take the test", (p.tests || []).some((t) => t.done), "test"]] : [["Profile", !!p.name, "account"], ["Accounts", !!(p.lichess || p.chesscom), "account"], ["Load games", nG > 0, "games"], ["Report", (p.reports || []).length > 0, "report"], ["Training", Object.keys(p.practice || {}).length > 0 || Object.values(p.puzzles).some((x) => x.attempts), "training"], ["Test", tests.length > 0, "test"]];
   const nDone = stepsDef.filter((x) => x[1]).length;
   const todo = (ic, title, sub, count, go_, label) => `<div class="todo"><div class="ic">${icon(ic)}</div><div><b>${title}</b><span class="small">${sub}</span></div><div class="row" style="gap:12px">${count ? `<span class="count">${count}</span>` : ""}<button class="btn ${count ? "" : "secondary"} small" data-go="${go_}">${label}</button></div></div>`;
+  const gsCard = nDone < stepsDef.length ? `<div class="card"><h2>Getting started</h2><p class="small muted">${nDone} of ${stepsDef.length} done</p><div class="progress">${stepsDef.map(([, d]) => `<span class="${d ? "done" : ""}"></span>`).join("")}</div>
+      <div class="steps" style="margin-top:12px">${stepsDef.map(([l, d, t], i) => `<button class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${i + 1}</div>${l}</button>`).join("")}</div></div>` : "" || "";
   v.innerHTML = `<div class="hello"><div><div class="who">${new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"},</div><h1 style="margin:0;font-size:34px;font-weight:780">${esc(p.name)}</h1></div>
       <div class="rating"><b>${playerElo(p)}</b>rating${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
+    ${nDone < 3 ? gsCard : ""}
     <div class="card"><h2>Today</h2><div class="today">
+      ${p.level === "new" || (p.learn && Object.keys(p.learn).length && LESSONS.some((l) => !(p.learn || {})[l.id])) ? (() => { const d = LESSONS.filter((l) => (p.learn || {})[l.id]).length; const nx = LESSONS.find((l) => !(p.learn || {})[l.id]); return todo("train", nx ? "Learn the basics" : "Play the computer", nx ? `Lesson ${d + 1} of ${LESSONS.length}: ${esc(nx.title)}` : "All lessons done. Play a game at your level", null, "learn", nx ? (d ? "Continue" : "Start") : "Play"); })() : ""}
       ${todo("puzzle", "Puzzles from your games", duePz ? "Your own mistakes, repeated at spaced intervals" : nG ? "Nothing due. Come back tomorrow" : "Import games first: your mistakes become puzzles", duePz, nG ? "puzzles" : "games", duePz ? "Solve" : nG ? "Open" : "Import")}
       ${todo("king", "Endgames to review", "Theory positions you play out against the engine", dueEg, "endgames", "Train")}
       ${todo("test", tests.length ? "Thinking test" : "Take the thinking test", tests.length ? (() => { const lt = tests[tests.length - 1]; const rated = lt.items.some((i) => i.kind !== "style" && i.rating); return `Last test ${esc(lt.date)}: ${rated ? `test rating ${lt.result?.overall ?? "–"}` : `${lt.items.length} style positions`}`; })() : "Measures calculation depth, style and player type", null, tests.length ? "results" : "test", tests.length ? "Results" : "Start")}
       ${todo("analyse", "Your games", nG ? `${nG} games analysed${last ? `, last report ${esc(last.date)}` : ""}` : "Load the last months from Lichess or Chess.com", null, "games", nG ? "Import new" : "Import")}
-      ${todo("openings", "Openings", st ? `Ideas, strengths and weak sides, with what fits a ${esc(st.typeName.toLowerCase())}` : "Ideas, strengths and weak sides of 36 openings", null, "openings", "Browse")}
+      ${todo("openings", "Openings", st ? `Ideas, strengths and weak sides, with what fits ${/^[aeiou]/i.test(st.typeName) ? "an" : "a"} ${esc(st.typeName.toLowerCase())}` : "Ideas, strengths and weak sides of 36 openings", null, "openings", "Browse")}
     </div></div>
+    ${(() => { const R = ratingInfo(p); return R.differ ? `<div class="card"><h2>Which rating should training use?</h2><p class="small">You said <b>${esc(p.rating)}</b>; your games say about <b>${R.games}</b> (from the ratings in the game files). Puzzles, test positions and endgames are pitched at <b>${R.used}</b> now.</p>
+      <div class="row" style="gap:8px"><button class="btn ${p.ratingPref === "mine" ? "" : "secondary"} small" data-rpref="mine">Use mine (${esc(p.rating)})</button><button class="btn ${p.ratingPref === "mine" ? "secondary" : ""} small" data-rpref="games">Use my games (${R.games})</button></div></div>` : ""; })()}
     <div class="card"><h2>Next steps</h2>${nextStepsHtml(p)}</div>
-    ${nDone < stepsDef.length ? `<div class="card"><h2>Getting started</h2><p class="small muted">${nDone} of ${stepsDef.length} done</p><div class="progress">${stepsDef.map(([, d]) => `<span class="${d ? "done" : ""}"></span>`).join("")}</div>
-      <div class="steps" style="margin-top:12px">${stepsDef.map(([l, d, t], i) => `<button class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${i + 1}</div>${l}</div>`).join("")}</button></div>` : ""}`;
+    ${nDone >= 3 ? gsCard : ""}`;
   v.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
+  v.querySelectorAll("[data-rpref]").forEach((b) => (b.onclick = () => { p.ratingPref = b.dataset.rpref; save(); go("home"); }));
   bindNextSteps(v, p);
 }
 function account(v) {
@@ -215,7 +229,7 @@ function account(v) {
     <div class="card"><h2>Lichess token (opening book statistics)</h2><p class="small muted">The opening book works without it. With a free personal Lichess token it also shows how often each move is played and how it scores, in master games and in Lichess games of 1800+ players. Create one (no permissions needed) at <a href="https://lichess.org/account/oauth/token/create?description=Chess%20Coach%20explorer" target="_blank" rel="noopener">lichess.org → API access tokens</a> and paste it here. It stays in this browser only and is not included in backups.</p>
       <div class="row"><input id="lit" class="grow" placeholder="${lichessToken() ? "•••••••• (saved)" : "lip_…"}" autocomplete="off"><button class="btn" id="litSave">Save</button>${lichessToken() ? '<button class="btn secondary" id="litDel">Remove</button>' : ""}</div><div id="litMsg" class="small" style="margin-top:6px"></div></div>
     <div class="card"><h2>Delete player</h2><p class="small muted">Removes ${esc(p.name)} and all games, puzzles, tests and notes from this browser. Make a backup first (Home → Log &amp; backup).</p><button class="btn danger" id="delP">Delete ${esc(p.name)}</button></div>`;
-  aiSettings(v.querySelector("#aiCardA"));
+  aiSettings(v.querySelector("#aiCardA")); bindProfileForm(v);
   $("#litSave").onclick = () => { const t = $("#lit").value.trim(); if (!t) { $("#litMsg").textContent = "Paste your Lichess token in the field first."; return; } setLichessToken(t); toast("Lichess token saved"); go("account"); };
   if ($("#litDel")) $("#litDel").onclick = () => { setLichessToken(""); toast("Lichess token removed"); go("account"); };
   $("#saveP").onclick = () => { const d = readProfile(v); if (!d.name) return toast("Fill in a name"); Object.assign(p, d); save(); renderPicker(); v.querySelector("h2").textContent = p.name; toast("Profile saved"); };
@@ -223,13 +237,24 @@ function account(v) {
       const q = loadQueue(); if (q?.player === p.id) { if (running) running.stop = true; saveQueue(null); $("#jobBar").classList.add("hidden"); }
       delete S.players[p.id]; S.current = Object.keys(S.players)[0] || null; save(); go("home"); } };
 }
+const LEVELS = [["new", "I'm new to chess (I want to learn the rules)"], ["rules", "I know the rules, but have no rating"], ["rated", "I have a rating (online or club)"]];
 function profileForm(p) {
   const f = (id, label, val, type = "text", ph = "") => `<label class="f">${label}<input id="pf_${id}" type="${type}" value="${esc(val ?? "")}" placeholder="${ph}"></label>`;
-  return `<div class="form">${f("name", "Name", p.name)}${f("lichess", "Lichess username", p.lichess)}${f("chesscom", "Chess.com username", p.chesscom)}
-    ${f("pgnName", "Name in PGN files (OTB)", p.pgnName, "text", "e.g. De Wilde, Sam")}${f("rating", "Rating (approx.)", p.rating)}${f("hours", "Hours per week for chess", p.hours ?? 4, "number")}
-    ${f("goal", "Goal", p.goal, "text", "e.g. 1600 rapid by the summer")}</div>`;
+  const lvl = p.level || (p.rating ? "rated" : "");
+  const tcs = p.tcs || [];
+  return `<div class="form">${f("name", "Name", p.name)}
+    <label class="f">Your level<select id="pf_level"><option value="" ${lvl ? "" : "selected"} disabled>Choose…</option>${LEVELS.map(([k, l]) => `<option value="${k}" ${lvl === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <span id="pf_ratingWrap" class="${lvl === "rated" ? "" : "hidden"}">${f("rating", "Rating (approx.)", p.rating, "number", "e.g. 950")}</span></div>
+    <div class="f" style="margin-top:10px"><span>What do you play? <span class="muted small">(used when loading your games)</span></span><div class="tcpick row" style="gap:6px;flex-wrap:wrap;margin-top:4px">${["bullet", "blitz", "rapid", "classical", "correspondence"].map((c) => `<label class="chip"><input type="checkbox" data-pftc="${c}" ${tcs.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div></div>
+    <div class="form" style="margin-top:10px">${f("lichess", "Lichess username (optional)", p.lichess)}${f("chesscom", "Chess.com username (optional)", p.chesscom)}</div>
+    <details style="margin-top:10px"><summary class="small"><b>More</b>: over-the-board games, goal, time per week</summary><div class="form" style="margin-top:8px">
+    ${f("pgnName", "Your name in PGN files of club/tournament games", p.pgnName, "text", "e.g. De Wilde, Sam")}${f("hours", "Hours per week for chess", p.hours ?? 4, "number")}
+    ${f("goal", "Goal", p.goal, "text", "e.g. 1600 rapid by the summer")}</div></details>`;
 }
-function readProfile(v) { const g = (id) => $("#pf_" + id, v).value.trim(); return { name: g("name"), lichess: g("lichess"), chesscom: g("chesscom"), pgnName: g("pgnName"), rating: g("rating"), hours: +g("hours") || 4, goal: g("goal") }; }
+function bindProfileForm(v) { const l = $("#pf_level", v); if (l) l.onchange = () => $("#pf_ratingWrap", v).classList.toggle("hidden", l.value !== "rated"); }
+function readProfile(v) { const g = (id) => ($("#pf_" + id, v)?.value || "").trim(); const level = g("level");
+  return { name: g("name"), level, lichess: g("lichess"), chesscom: g("chesscom"), pgnName: g("pgnName"), rating: level === "rated" ? g("rating") : "", hours: +g("hours") || 4, goal: g("goal"),
+    tcs: [...v.querySelectorAll("[data-pftc]")].filter((x) => x.checked).map((x) => x.dataset.pftc) }; }
 function nextStepsHtml(p) {
   if (!p.nextSteps.length) return `<p class="muted">Steps appear automatically after an analysis. You can also add your own.</p>${addStepHtml()}`;
   return p.nextSteps.map((s, i) => `<label class="row" style="margin:4px 0"><input type="checkbox" data-step="${i}" ${s.done ? "checked" : ""}><span style="flex:1;${s.done ? "text-decoration:line-through;opacity:.6" : ""}">${esc(s.text)}</span></label>`).join("") + addStepHtml();
@@ -250,7 +275,9 @@ const IOKEY = "chesscoach.importOpts";
 // reached on every device; a phone just needs more time for it.
 const SPEEDS = [[12, "Quick · depth 12 · ≈2400 Elo"], [14, "Fast · depth 14 · ≈2500 Elo"], [16, "Normal · depth 16 · ≈2650 Elo"], [18, "Deep · depth 18 · ≈2750 Elo"], [20, "Very deep · depth 20 · ≈2900 Elo"], [22, "Maximum · depth 22 · ≈3000 Elo"]];
 const TC_LABEL = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", correspondence: "Correspondence" };
-function importOpts() { try { const o = JSON.parse(localStorage.getItem(IOKEY)); if (o && Array.isArray(o.cats)) return o; } catch {} return { cats: ["rapid", "classical"], exact: "" }; }
+function importOpts() { const pt = P()?.tcs;
+  try { const o = JSON.parse(localStorage.getItem(IOKEY)); if (o && Array.isArray(o.cats) && (!pt || !pt.length || o.player === P()?.id)) return o; } catch {}
+  return { cats: pt && pt.length ? pt : ["blitz", "rapid", "classical"], exact: "" }; }
 function readTcFilter(v) {
   const cats = [...v.querySelectorAll("[data-tc]")].filter((x) => x.checked).map((x) => x.dataset.tc);
   const exact = $("#tcExact", v).value.trim();
@@ -274,17 +301,14 @@ function games(v) {
       <div class="row" style="gap:6px;margin-top:4px;flex-wrap:wrap">${TC_CATS.map((c) => `<label class="chip"><input type="checkbox" data-tc="${c}" ${IO.cats.includes(c) ? "checked" : ""}> ${TC_LABEL[c]}</label>`).join("")}</div>
       <label class="f" style="margin-top:6px">Or only these exact time controls (optional)<input id="tcExact" value="${esc(IO.exact || "")}" placeholder="e.g. 3+0, 3+2, 10+5 (minutes + increment)"></label>
       <div class="small muted" id="tcHint"></div></div>
-    <label class="small" style="margin-top:6px;display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="reanalyse" style="margin-top:2px;flex:0 0 auto"><span>Re-analyse games that are already loaded (needed for centipawn loss against your opponents on games analysed before v26)</span></label>
+    <label class="small" style="margin-top:6px;display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="reanalyse" style="margin-top:2px;flex:0 0 auto"><span>Re-analyse games that are already loaded (do this once if the Report says some games have no phase data or no comparison with your opponents)</span></label>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">Load & analyse</button></div>
     <div id="prog" class="hidden" style="margin-top:12px"><div class="small" id="progText"></div><div class="bar" style="margin-top:6px"><div id="progBar"></div></div>
       <div class="row hidden" id="progBtns" style="gap:8px;margin-top:8px"><button class="btn secondary small" id="progPause">Pause</button><button class="btn secondary small" id="progCancel">Cancel analysis</button></div></div>
     <p class="small muted"><b>On your phone:</b> keep the app open. The screen stays on during the analysis (it won't lock by itself). If it does lock or the app closes, the analysis picks up where it stopped as soon as you open the app again. For many games, a computer is faster.</p>
     <p class="small muted">Categories follow Lichess: base time + 40 × increment under 3 min is bullet, under 8 min blitz, under 25 min rapid, longer is classical. The same rule is used for Chess.com games, so 10+0 is rapid on both sites. Exact time controls override the categories. Already-analysed games are skipped, so you can safely stop and continue later. Lichess games with a server analysis go much faster. <b>Analysis depth</b>: how many half-moves Stockfish looks ahead in every position. It reaches that depth on any device; a phone simply takes longer. Elo = roughly how strong Stockfish plays at that depth, so how far above your level the judge is. Normal (16) is plenty for club games; each step of 2 deeper takes about 2-3× as long. The first moves of a game (theory) and positions that are already won or lost are searched 6 half-moves less deep. Leave "Max. number of games" empty to load every game in the period.</p></div>
-    <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<div class="scroll"><table><tr><th>Date</th><th>Opponent</th><th>Colour</th><th>Result</th><th>Accuracy</th><th>Errors</th><th>Depth</th><th>Opening</th></tr>
-    ${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const res = g.score === 1 ? "win" : g.score === 0 ? "loss" : "draw";
-      const e = (l) => g.errors.filter((x) => x.label === l).length;
-      return `<tr><td>${esc(g.date)}</td><td>${g.site && g.site.startsWith("http") ? `<a href="${esc(g.site)}" target="_blank" rel="noopener">${esc(opp)}</a>` : esc(opp)} <span class="muted small">${esc(g.opponentElo || "")}</span></td><td>${g.color === "w" ? "White" : "Black"}</td><td>${res}</td><td>${g.accuracy ?? "–"}</td><td><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></td><td class="small">${g.usedPgnEvals ? "Lichess" : g.depth ?? "–"}</td><td class="small">${esc(g.opening)}</td></tr>`; }).join("")}</table></div>
-    <div class="row" style="margin-top:10px"><button class="btn secondary" id="clearG">Delete all games</button></div>` : `<p class="muted">No games yet.</p>`}</div>`;
+    <div class="card"><h2>Analysed games (${list.length})</h2>${list.length ? `<p>All analysed games are stored and stay available, whatever period you load next. See, filter and replay them in <b>My games</b>.</p>
+    <div class="row" style="margin-top:10px;gap:8px"><button class="btn" id="toMy">Open My games</button><button class="btn secondary" id="clearG">Delete all games</button></div>` : `<p class="muted">No games yet.</p>`}</div>`;
   const srcP = $("#srcP");
   srcP.onchange = () => $("#pgnBox").classList.toggle("hidden", !srcP.checked);
   srcP.onchange();
@@ -299,6 +323,7 @@ function games(v) {
   if (running) { $("#prog").classList.remove("hidden"); }
   else if (pq && pq.items?.length) { $("#prog").classList.remove("hidden"); $("#progText").innerHTML = `Paused analysis: ${pq.items.length} game${pq.items.length === 1 ? "" : "s"} left. <a href="#" id="resumeQ">Continue</a> · <a href="#" id="dropQ">Cancel</a>`;
     $("#resumeQ").onclick = (e) => { e.preventDefault(); processQueue(pq); }; $("#dropQ").onclick = (e) => { e.preventDefault(); saveQueue(null); $("#jobBar").classList.add("hidden"); go("games"); }; }
+  if ($("#toMy")) $("#toMy").onclick = () => go("mygames");
   if ($("#clearG")) $("#clearG").onclick = () => { if (confirm("Delete all analysed games for this player? (Puzzles and log are kept.)")) { p.games = {}; save(); go("games"); } };
 }
 
@@ -397,7 +422,7 @@ async function runImport(v) {
   const tf = readTcFilter(v);
   if (tf.specific === null) return toast("Couldn't read the exact time controls. Write them like 3+0, 5+3.");
   if (!tf.specific.length && !tf.cats.length) return toast("Tick at least one time control.");
-  try { localStorage.setItem(IOKEY, JSON.stringify({ cats: tf.cats, exact: tf.exact, depth: +$("#speed").value, num: +$("#num").value > 0 ? +$("#num").value : null })); } catch {}
+  try { localStorage.setItem(IOKEY, JSON.stringify({ player: P().id, cats: tf.cats, exact: tf.exact, depth: +$("#speed").value, num: +$("#num").value > 0 ? +$("#num").value : null })); } catch {}
   const opts = { lichess: $("#srcL").checked, chesscom: $("#srcC").checked, pgn: $("#srcP").checked, months: +$("#months").value, tf, num: +$("#num").value > 0 ? +$("#num").value : Infinity };
   const depth = +$("#speed").value;
   const re = $("#reanalyse").checked;
@@ -521,7 +546,9 @@ function buildReport(p) {
 // ------------------------------------------------------------------ REPORT
 function report(v) {
   const p = P();
-  const gs = Object.values(p.games);
+  const gsAll = Object.values(p.games);
+  const gs = periodGames(p);
+  if (gsAll.length && !gs.length) { v.innerHTML = `<div class="card"><h2>Report</h2>${periodBarHtml(p)}<p>No analysed games in this period. Choose a longer period.</p></div>`; bindPeriodBar(v, p, "report"); return; }
   if (!gs.length) { v.innerHTML = `<div class="card"><h2>Report</h2><p>No analysed games yet.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   p.settings ||= {};
   const tcs = TC_CATS.filter((c) => gs.some((g) => g.tc === c)).concat(gs.some((g) => !TC_CATS.includes(g.tc)) ? ["unknown"] : []);
@@ -532,8 +559,15 @@ function report(v) {
   const accAll = myMoves ? +(Object.entries(A.phaseAcc).reduce((a, [k, x]) => a + x * A.phaseMoves[k], 0) / myMoves).toFixed(1) : null;
   const per100 = (k) => (myMoves ? ` <span class="muted">(${(100 * (E[k] || 0) / myMoves).toFixed(1)}/100 moves)</span>` : "");
   const hist = p.reports.slice(0, 6);
+  const moreOpen = p.settings.repMore ?? innerWidth > 900;
   const tcBar = tcs.length > 1 ? `<div class="chips" id="repTc"><button class="chip ${sel.length ? "" : "on"}" data-rtc="">All (${gs.length})</button>${tcs.map((c) => `<button class="chip ${sel.includes(c) ? "on" : ""}" data-rtc="${c}">${TC_LABEL[c] || "Unknown"} (${gs.filter((g) => (TC_CATS.includes(g.tc) ? g.tc : "unknown") === c).length})</button>`).join("")}</div>` : "";
-  v.innerHTML = `${tcBar}
+  v.innerHTML = `<div class="card" style="padding-bottom:10px">${periodBarHtml(p)}${tcBar}</div>
+  ${summaryHtml(A, D)}
+  <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
+     ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}${ddTheme(w.key) ? `<div style="margin-top:6px"><button class="btn secondary small" data-ddtheme="${ddTheme(w.key)}">In depth: your positions, principles, books & videos</button></div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}
+    <p class="small" style="margin-top:8px"><a href="#" id="toWeak">All weak points in depth →</a></p></div>
+  <div class="moretoggle"><button class="btn secondary" id="repMoreBtn" aria-expanded="${moreOpen}">${moreOpen ? "Hide" : "Show"} all statistics</button><span class="small muted">accuracy, centipawn loss, phases, progress over time, openings, endgames</span></div>
+  <div id="repMore" class="${moreOpen ? "" : "hidden"}">
   <div class="card"><h2>Overview: ${A.games} game${A.games === 1 ? "" : "s"}${sel.length ? ` <span class="muted small">(${sel.map((c) => (TC_LABEL[c] || "unknown").toLowerCase()).join(" + ")})</span>` : ""}</h2><div class="stats">
     <div class="stat"><div class="v">${A.scorePct}%</div><div class="l">score · won ${np(A.wins, A.games)} · drawn ${np(A.draws, A.games)} · lost ${np(A.losses, A.games)}</div></div>
     <div class="stat"><div class="v">${accAll ?? "–"}</div><div class="l">accuracy${C?.all?.opp ? ` · opponents ${C.all.opp.acc}` : ""}</div></div>
@@ -551,12 +585,10 @@ function report(v) {
     <li><b>Converted / saved</b>: games where your win chance went above 85% (or below 15%), and how they ended.</li>
     <li><b>Analysis depth</b>: ${A.depth ? `Stockfish 19 (lite) looked on average <b>${A.depth} half-moves</b> deep per position` : "unknown for older games"}${A.serverAnalysed ? `; ${A.serverAnalysed} games reused the Lichess server analysis` : ""}. Depth 14-16 reliably finds mistakes and blunders at club level, and depth 18+ is roughly what Lichess uses for a quick server analysis.</li>
   </ul></details></div>
+  ${timelineHtml(use)}
   ${phasesHtml(A.phases, A.games, C)}
   ${errMatrixHtml(A)}
   <div class="card"><h2>Strengths</h2>${D.strengths.map((s) => `<div class="list-item strong"><b>${esc(s.title)}</b><span class="small">${esc(s.evidence)}</span></div>`).join("")}</div>
-  <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
-     ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}${ddTheme(w.key) ? `<div style="margin-top:6px"><button class="btn secondary small" data-ddtheme="${ddTheme(w.key)}">In depth: your positions, principles, books & videos</button></div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}
-    <p class="small" style="margin-top:8px"><a href="#" id="toWeak">All weak points in depth →</a></p></div>
   <div class="card"><h2>Training plan: ${p.hours} h per week</h2>
     <p class="small muted">Based on GM Kuljasevic's study split (tactics 25 · endgames 25 · middlegame 20 · general 20 · openings 10), shifted toward your weak points. Change your hours per week under Home → Profile.</p>
     ${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week${D.plan.split[w.what] !== undefined ? ` (${D.plan.split[w.what]}%)` : ""}${w.weak ? ' <span class="pill mistake">focus</span>' : ""}</b><span class="small">${esc(w.how)}</span></div>`).join("")}</div>
@@ -567,9 +599,12 @@ function report(v) {
     ${Object.entries(A.endgames).map(([t, e]) => `<tr><td>${esc(t)}</td><td>${e.games}</td><td>${e.scorePct}%</td><td>${e.acc}</td></tr>`).join("") || "<tr><td colspan=4 class='muted'>No endgames reached yet</td></tr>"}</table></div>
   ${hist.length > 1 ? `<div class="card"><h2>Progress</h2><div class="scroll"><table><tr><th>Date</th><th>Games</th><th>Score</th><th>Opening</th><th>Middlegame</th><th>Endgame</th><th>Top error</th></tr>
     ${hist.map((h) => `<tr><td>${h.date}</td><td>${h.summary.games}</td><td>${h.summary.scorePct}%</td>${["opening", "middlegame", "endgame"].map((x) => `<td>${h.summary.phaseAcc[x] ?? "–"} / ${h.summary.per100[x] ?? "–"}</td>`).join("")}<td class="small">${esc(h.summary.topTags[0] || "")}</td></tr>`).join("")}</table></div><p class="small muted">Per phase: accuracy / errors per 100 moves.</p></div>` : ""}
+  </div>
   <div class="card"><h2>Next</h2><div class="row"><button class="btn" id="toTrain">Start training</button><button class="btn secondary" id="toProfile">Your style & player profile</button></div></div>
   <div class="card"><h2>Talk it through with Claude</h2><p class="small">Copy this summary and paste it into a chat with Claude for in-depth advice on plans, openings or a training schedule.</p><button class="btn secondary" id="copyRep">Copy summary for Claude</button></div>`;
-  bindRepertoire(v, p); bindFamilyTable(v);
+  bindRepertoire(v, p); bindFamilyTable(v); bindPeriodBar(v, p, "report");
+  $("#repMoreBtn", v).onclick = () => { p.settings.repMore = !moreOpen; save(); const y = scrollY; go("report"); scrollTo(0, y); };
+  v.querySelectorAll("[data-sumgo]").forEach((b) => (b.onclick = () => go(b.dataset.sumgo, JSON.parse(b.dataset.sumarg || "null") || undefined)));
   v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
   v.querySelectorAll("[data-ddtheme]").forEach((b) => (b.onclick = () => go("weak", { theme: b.dataset.ddtheme })));
   $("#toWeak", v) && ($("#toWeak", v).onclick = (e) => { e.preventDefault(); go("weak"); });
@@ -641,19 +676,21 @@ function training(v) {
     if (worst === "endgame" && !rec.includes("Endgame")) rec.unshift("Endgame");
   }
   const lastTest = (p.tests || []).filter((t) => t.done && Object.keys(t.result?.cats || {}).length).slice(-1)[0];
+  if (!rec.length) rec.push("Attack & mate", "Calculation", "Defence"); // no data yet: the basics that decide most games
   if (lastTest?.result) Object.entries(lastTest.result.cats).sort((a, b) => a[1].rating - b[1].rating).slice(0, 3).forEach(([c]) => { if (!rec.includes(c)) rec.unshift(c); });
   const all = TAC_CATS.concat(Object.keys(POS_GROUPS)).concat(["style", "Deep calculation"]);
   const prog = (c) => { const x = (p.practice || {})[c]; return x ? `${x.solved}/${x.n} solved · level ≈ ${Math.round(x.est)}` : "not started yet"; };
   const duePz = Object.values(p.puzzles).filter((x) => !x.due || x.due <= today()).length;
   v.innerHTML = `<div class="card"><h2>Your training</h2>
-    <p class="small">Based on ${A ? `your ${A.games} analysed games` : "your profile"}${lastTest ? " and your last test" : ""}. Start with the modules at the top: they target your weak points.</p>
+    <p class="small">${A || lastTest ? `Based on ${A ? `your ${A.games} analysed games` : "your test"}${A && lastTest ? " and your last test" : ""}. Start with the modules at the top: they target your weak points.` : `No games or test yet, so these are the basics that decide most games. Load your games (Analyse → Load games) and this plan adapts to your own mistakes.`}</p>
+    ${p.level === "new" ? `<div class="feedback info small" style="margin:8px 0">New to chess? Start with <a href="#" data-go="learn"><b>Learn the basics</b></a>: the rules, with exercises.</div>` : ""}
     <div class="feedback info small" style="margin:8px 0">Want to know <b>what exactly</b> goes wrong, with your own positions, principles, books and videos? <a href="#" data-go="weak">Weak points in depth</a></div>
     <h3>Recommended modules</h3>${rec.length ? rec.slice(0, 6).map((c, i) => `<div class="list-item ${i < 3 ? "weak" : ""}"><div class="row" style="justify-content:space-between"><span><b>${esc(MOD_LABEL(c))}</b> <span class="small muted">${prog(c)}</span></span><button class="btn small" data-prac="${esc(c)}">Train</button></div></div>`).join("") : `<p class="muted small">Analyse games or take the test first.</p>`}
     <h3>Daily routine (${p.hours} h/week)</h3><ol class="small">
       <li><b>Puzzles from your own games</b>: ${duePz} due today. <a href="#" data-go="puzzles">Go</a></li>
       <li><b>Module of the day</b>: 10 positions from the first recommended module, with the Think sheet for each position.</li>
       <li><b>Endgames</b>: 1 theory position to play out. <a href="#" data-go="endgames">Go</a></li>
-      <li><b>Serious games</b> (15+10 or slower): afterwards, load them on the Games tab and check your mistakes.</li></ol>
+      <li><b>Play</b>: a few games at your usual speed${(p.tcs || []).some((t) => t === "bullet" || t === "blitz") ? " (with increment if you can, e.g. 3+2: you learn more when there's time to think)" : ""}. Afterwards, load them (Analyse → Load games) and look at your mistakes.</li></ol>
     ${D ? `<h3>Weekly schedule</h3>${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week</b><span class="small">${esc(w.how)}</span></div>`).join("")}` : ""}</div>
     <div class="card"><h2>All modules</h2><div class="scroll"><table>${all.map((c) => `<tr><td>${esc(MOD_LABEL(c))}</td><td class="small muted">${TAC_CATS.includes(c) || c === "Deep calculation" ? "tactical" : c === "style" ? "style" : "positional"}</td><td class="small">${prog(c)}</td><td><button class="btn secondary small" data-prac="${esc(c)}">Train</button></td></tr>`).join("")}</table></div></div>`;
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => go("practice", { cat: b.dataset.prac })));
@@ -676,14 +713,16 @@ function ddTheme(key = "") {
 function weak(v, arg) {
   const p = P();
   if (!Object.keys(p.games || {}).length) { v.innerHTML = `<div class="card"><h2>Weak points in depth</h2><p>Analyse your games first (Analyse → Games): this page is built from your own mistakes.</p><button class="btn" id="g">Load games</button></div>`; $("#g").onclick = () => go("games"); return; }
-  const ranked = Object.keys(THEMES).map((k) => ({ k, ...themeData(p, k) })).sort((a, b) => b.lost - a.lost);
+  const pg = periodGames(p);
+  const ranked = Object.keys(THEMES).map((k) => ({ k, ...themeData(p, k, pg) })).sort((a, b) => b.lost - a.lost);
   p.settings ||= {};
   const key = (arg && arg.theme) || p.settings.weakTheme || ranked.find((r) => r.errs.length)?.k || "tactical";
   const elo = playerElo(p);
-  v.innerHTML = `<div class="card"><h2>What to train first</h2><p class="small muted" style="margin-top:-6px">Your mistakes and blunders, grouped by what went wrong, from most to least costly. Tap one to see the patterns in your games, your own positions, the principles to follow and where to learn more.</p>
+  v.innerHTML = `<div class="card"><h2>What to train first</h2><p class="small muted" style="margin-top:-6px">Your mistakes and blunders, grouped by what went wrong, from most to least costly. Tap one to see the patterns in your games, your own positions, the principles to follow and where to learn more.</p>${periodBarHtml(p)}
     <div class="ddrank">${ranked.map((r, i) => `<button class="ddr ${r.k === key ? "on" : ""}" data-theme="${r.k}"><span class="ddn">${i + 1}</span><span><b>${esc(THEMES[r.k].title)}</b><br><span class="small">${r.errs.length} error${r.errs.length === 1 ? "" : "s"} · −${r.lost}/game</span></span></button>`).join("")}</div>
     <p class="small muted">"−x/game" = points of win chance these errors cost you per game. Start at the top: that's where the most points are.</p></div>
-    <div id="ddbody">${deepDiveHtml(p, key, esc, elo)}</div>`;
+    <div id="ddbody">${deepDiveHtml(p, key, esc, elo, pg)}</div>`;
+  bindPeriodBar(v, p, "weak", arg);
   v.querySelectorAll("[data-theme]").forEach((b) => (b.onclick = () => { p.settings.weakTheme = b.dataset.theme; save(); go("weak", { theme: b.dataset.theme }); }));
   v.querySelectorAll("[data-ddfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.ddfen })));
   v.querySelectorAll("[data-ddgo]").forEach((b) => (b.onclick = () => { const a = JSON.parse(b.dataset.ddarg || "null"); go(b.dataset.ddgo, a || undefined); }));
@@ -699,11 +738,12 @@ function puzzles(v, arg) {
   if (!all.length && flt) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>None of your saved puzzles is of this kind yet. Your biggest mistakes become puzzles each time a report is made.</p><button class="btn" id="g">Show all puzzles</button></div>`; $("#g").onclick = () => go("puzzles"); return; }
   if (!all.length) { v.innerHTML = `<div class="card"><h2>Puzzles from your own games</h2><p>Analyse games first: your biggest mistakes become puzzles here.</p><button class="btn" id="g">Import games</button></div>`; $("#g").onclick = () => go("games"); return; }
   const known = all.filter((x) => (x.box || 0) >= 4).length;
-  v.innerHTML = `<div class="two"><div><div id="pb"></div><div id="plb"></div><div class="row" style="margin-top:8px"><button class="btn" id="pCheck">Check my lines</button></div><div class="row" style="margin-top:8px"><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn secondary" id="explore">Open on Board</button><button class="btn" id="next">Next</button></div>
-    <div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button><button class="btn secondary" id="pWhy">Explain the solution</button></div>
+  v.innerHTML = `<div class="two"><div><div id="pinfo" class="ptask"></div><div id="pb"></div><div id="plb"></div><div class="row" style="margin-top:8px"><button class="btn" id="pCheck">Check my lines</button><button class="btn secondary" id="hint">Hint</button><button class="btn secondary" id="show">Show solution</button><button class="btn" id="next">Next</button></div>
+    <div id="pfb"></div>
+    <details class="pmore"><summary>More help: read the position, think sheet, explanation, board</summary><div class="row" style="margin-top:8px"><button class="btn secondary" id="pRead">Read the position</button><button class="btn secondary" id="pSheet">Think sheet</button><button class="btn secondary" id="pWhy">Explain the solution</button><button class="btn secondary" id="explore">Open on Board</button></div></details>
     <div id="pWhyOut"></div>
     <div class="card hidden" id="pReadOut" style="margin-top:12px"></div><div class="card hidden" id="pSheetOut" style="margin-top:12px"></div></div>
-    <div><div class="card"><h2>Your mistakes as puzzles</h2>${flt ? `<div class="feedback info small">Only ${arg.cause ? esc(THEMES[arg.cause]?.title.toLowerCase() || arg.cause) : esc(arg.phase) + " mistakes"}. <a href="#" id="pzAll">Show all puzzles</a></div>` : ""}<div class="small muted">${flt ? `${all.length} positions` : `${due.length} due · ${all.length} total · ${known} known`}</div><div id="pinfo" style="margin-top:10px"></div><div id="pfb"></div></div>
+    <div><div class="card"><h2>Your mistakes as puzzles</h2>${flt ? `<div class="feedback info small">Only ${arg.cause ? esc(THEMES[arg.cause]?.title.toLowerCase() || arg.cause) : esc(arg.phase) + " mistakes"}. <a href="#" id="pzAll">Show all puzzles</a></div>` : ""}<div class="small muted">${flt ? `${all.length} positions` : `${due.length} due · ${all.length} total · ${known} known`}</div></div>
     <div class="card"><h2>How it works</h2><p class="small">Every position comes from your own game, at the moment you went wrong. Put your move <b>and the line you expect</b> on the board: the pieces stay where they are, every move is written down. A move for the other side starts an extra line (another defence or another idea). Press <b>Check my lines</b> and Stockfish judges your main line (★) and the extra lines. Find the best move. Get it right and you'll see it again after 1, 3, 7, 21 and 60 days. Get it wrong and it comes back tomorrow. Ask yourself first: <b>what does my opponent threaten, and what checks, captures and threats do I have?</b></p></div></div></div>`;
   const brd = new Board($("#pb"), { orientation: "w" });
   let cur = null, idx = 0, solved = false, tries = 0, lb = null;
@@ -718,7 +758,8 @@ function puzzles(v, arg) {
     getEngine().cancel();
     analyseMemo(cur.fen, { movetime: 900 }).then(([b]) => { if (b?.pv[0]) { const c = new Chess(cur.fen); try { c.move({ from: b.pv[0].slice(0, 2), to: b.pv[0].slice(2, 4), promotion: b.pv[0][4] }); if (!c.isGameOver()) analyseMemo(c.fen(), { movetime: 900 }); } catch {} } });
     const side = cur.fen.split(" ")[1] === "w" ? "White" : "Black";
-    $("#pinfo").innerHTML = `<b>Move ${cur.moveNo}, you're ${side}</b> (${esc(cur.phase)}). Eval before your move: ${Math.abs(cur.evalBefore) >= 90 ? (cur.evalBefore > 0 ? "a forced mate for you" : "you are getting mated") : (cur.evalBefore > 0 ? "+" : "") + cur.evalBefore}.<br><span class="small muted">${cur.played === "?" ? "Your own position: find the best move." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}. Find a better move.`}</span>`;
+    const ev = cur.evalBefore, evTxt = Math.abs(ev) >= 90 ? (ev > 0 ? "you have a forced mate" : "you are getting mated") : Math.abs(ev) < 0.7 ? "about equal" : `you are ${ev > 0 ? "better" : "worse"} (${ev > 0 ? "+" : ""}${ev}: ${ev > 0 ? "up" : "down"} about ${Math.abs(ev).toFixed(1)} pawn${Math.abs(ev) >= 1.5 ? "s" : ""})`;
+    $("#pinfo").innerHTML = `<b>${side === "White" ? "White" : "Black"} to move: find a better move.</b> <span class="small muted">Move ${cur.moveNo} of your game, ${esc(cur.phase)}; ${evTxt}.</span><br><span class="small muted">${cur.played === "?" ? "Your own position." : `In the game you played <b>${esc(cur.played)}</b>${cur.game && cur.game.startsWith("http") ? ` · <a href="${esc(cur.game)}" target="_blank" rel="noopener">game</a>` : ""}.`}</span>`;
     $("#pReadOut").classList.add("hidden"); $("#pSheetOut").classList.add("hidden"); $("#pWhyOut").innerHTML = "";
   };
   $("#pCheck").onclick = async () => {
@@ -780,12 +821,27 @@ async function gradeMove(fen, uci, movetime = 900) {
   const eng = { analyse: analyseMemo };
   const [best] = await eng.analyse(fen, { movetime });
   const c = new Chess(fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-  let after;
-  if (c.isCheckmate()) after = 10000; else if (c.isDraw()) after = 0; else { const [l] = await eng.analyse(c.fen(), { movetime }); after = -lineToCp(l); }
+  let after, reply = null;
+  if (c.isCheckmate()) after = 10000; else if (c.isDraw()) after = 0; else { const [l] = await eng.analyse(c.fen(), { movetime }); after = -lineToCp(l); reply = l?.pv || null; }
   const bcp = lineToCp(best);
   const drop = Math.max(0, winPct(bcp) - winPct(after));
   const verdict = drop < 2 ? "best" : drop < 5 ? "good" : drop < 10 ? "inaccuracy" : drop < 15 ? "mistake" : "blunder";
-  return { drop, verdict, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8) };
+  return { drop, verdict, bestCp: bcp, afterCp: after, bestUci: best?.pv[0], bestLine: pvToSan(fen, best?.pv || [], 8), punish: reply ? punishText(c.fen(), reply) : "" };
+}
+// In plain words: what the opponent does against your move ("Qxe5 takes your queen", "Qh7 is mate")
+const PIECE_NAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+function punishText(fen, pv) {
+  try {
+    const c = new Chess(fen); const m = c.move({ from: pv[0].slice(0, 2), to: pv[0].slice(2, 4), promotion: pv[0][4] });
+    if (c.isCheckmate()) return `your opponent plays ${m.san}, checkmate`;
+    if (m.captured && m.captured !== "p") return `your opponent plays ${m.san} and takes your ${PIECE_NAME[m.captured]}`;
+    // a check or attack now that wins something on the next move
+    if (pv[1] && pv[2]) { const m2 = c.move({ from: pv[1].slice(0, 2), to: pv[1].slice(2, 4), promotion: pv[1][4] }); const m3 = c.move({ from: pv[2].slice(0, 2), to: pv[2].slice(2, 4), promotion: pv[2][4] });
+      if (c.isCheckmate()) return `your opponent plays ${m.san}, and after ${m2.san} ${m3.san} it is checkmate`;
+      if (m3.captured && m3.captured !== "p") return `your opponent plays ${m.san}${m.san.includes("+") ? " (check)" : ""}, and after ${m2.san} wins your ${PIECE_NAME[m3.captured]} with ${m3.san}`; }
+    if (m.captured) return `your opponent plays ${m.san} and wins a pawn`;
+    return `your opponent answers ${m.san}`;
+  } catch { return ""; }
 }
 
 // ------------------------------------------------------------------ ENDGAMES
@@ -822,7 +878,7 @@ function endgames(v, arg) {
       $("#q").innerHTML = `<div class="feedback ${ok ? "ok" : "no"}">${ok ? "Correct" : "Not quite"}: ${esc(e.question.answer)}. ${esc(e.idea)}</div>`;
       begin();
     }));
-    probe(e.fen).then((t) => { if (cur === e) $("#src").textContent = t ? "Perfect play: Lichess tablebase." : "Played by Stockfish (more than 7 pieces, or the tablebase can't be reached)."; });
+    probe(e.fen).then((t) => { if (cur === e) $("#src").textContent = t ? "Perfect play: Lichess tablebase." : (new Chess(e.fen).board().flat().filter(Boolean).length > 7 ? "Played by Stockfish (more than 7 pieces: too many for the tablebase)." : navigator.onLine ? "Played by Stockfish (the Lichess tablebase didn't answer)." : "Played by Stockfish (you're offline, so the Lichess tablebase can't be used)."); });
     if (!e.question) begin();
   };
   const begin = async () => {
@@ -966,6 +1022,26 @@ function phasesHtml(F, total, C) {
       <li><b>Better / equal / worse</b>: at least one pawn up (+1.0), between −1 and +1, or at least one pawn down, according to Stockfish at the moment the phase changes. So "equal out of the opening, worse when the endgame began" means you lost the thread in the middlegame.</li>
       <li><b>95% range</b>: if you played many more games like these, the true average would lie in this range 95% of the time. With fewer than 10 games it is shown with a "few games" label.</li></ul></details></div>`;
 }
+// "In short": the answer to "why do I lose and what do I do" in a few lines, before any statistics
+const DAILY = {
+  tactical: ["10 min: your own mistakes as puzzles", "5 min: Lichess puzzles of one theme (forks, pins…)", "In every game: before each move, look at all checks, captures and threats, for both sides"],
+  positional: ["10 min: your own positional mistakes as puzzles", "Watch one game explained move by move (see Weak points → Learn more)", "In every game: when nothing is forcing, improve your worst piece"],
+  opening: ["10 min: look up the line where you went wrong in your most played opening", "Play the opening against the computer a few times", "In every game: develop, castle, then attack"],
+  technique: ["10 min: one endgame from Train → Endgames", "Learn one key endgame position a week", "In every endgame: bring your king forward first"],
+  time: ["Play a few games with increment (e.g. 3+2 or 10+5) instead of no increment", "10 min: easy puzzles fast (Lichess Puzzle Storm) to decide simple moves quicker", "In every game: check your clock at moves 10, 20 and 30"],
+};
+function summaryHtml(A, D) {
+  const M = A.errMatrix; if (!M) return "";
+  const tot = Object.values(M).flatMap((cs) => Object.values(cs)).reduce((a, x) => a + x.n, 0);
+  const cells = Object.entries(M).flatMap(([ph, cs]) => Object.entries(cs).map(([c, x]) => ({ ph, c, ...x }))).filter((x) => x.n).sort((a, b) => b.perGame - a.perGame).slice(0, 2);
+  const CN = { tactical: "Tactics you miss or allow", positional: "Positional mistakes (plans, piece placement, pawn moves)", technique: "Endgame technique", time: "Mistakes in time trouble" };
+  const theme = cells[0] ? (cells[0].c === "positional" && cells[0].ph === "opening" ? "opening" : cells[0].c) : null;
+  const res = `You scored <b>${A.scorePct}%</b> in ${A.games} game${A.games === 1 ? "" : "s"}: ${A.wins} won, ${A.draws} drawn, ${A.losses} lost.`;
+  return `<div class="card insh"><h2>In short</h2><p>${res}</p>
+    ${cells.length ? `<p><b>Where your points go</b> (${tot} mistakes and blunders in total):</p><ol>${cells.map((x) => `<li><b>${CN[x.c]} in the ${x.ph}</b>: ${x.n} of ${tot}${x.ex[0] ? `, for example move ${x.ex[0].moveNo} ${esc(x.ex[0].played)} instead of ${esc(x.ex[0].best || "?")}` : ""}.</li>`).join("")}</ol>` : `<p>No mistakes or blunders in these games.</p>`}
+    ${theme ? `<p><b>Do this, 15 minutes a day:</b></p><ul>${DAILY[theme].map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-sumgo="puzzles" data-sumarg='${JSON.stringify(theme === "opening" ? { phase: "opening" } : { cause: theme })}'>Train my mistakes</button><button class="btn secondary" data-sumgo="weak" data-sumarg='${JSON.stringify({ theme })}'>Explain it in depth</button></div>` : ""}</div>`;
+}
 function errMatrixHtml(A) {
   const M = A.errMatrix; if (!M) return "";
   const causes = Object.keys(ERR_CAUSES), phs = ["opening", "middlegame", "endgame"];
@@ -1013,6 +1089,155 @@ function pathTable(F, total) {
 const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const PH_TIP = { opening: "Look at your openings (Openings → My repertoire) and the first critical decisions after theory.", middlegame: "Calculation, plans and tactics: puzzles from your games and the thinking test target exactly this.", endgame: "Technique and theory: train the endgames for your level (Train → Endgames)." };
 
+// ------------------------------------------------------------------ PERIOD (which games count)
+// One period per player, used by Report, My games, Compare and Weak points. Loading games for "3 months" only
+// decides what is fetched; games analysed earlier stay stored, and this filter decides which ones count.
+const PERIODS = [["all", "All time"], ["30", "Last 30 days"], ["90", "Last 3 months"], ["180", "Last 6 months"], ["365", "Last 12 months"], ["custom", "From … to …"]];
+function periodOf(p) { return (p.settings && p.settings.period) || { kind: "all" }; }
+function inPeriod(g, per) {
+  if (!per || per.kind === "all") return true;
+  const t = gameTime(g); if (t === null) return false;
+  if (per.kind === "custom") { const f = per.from ? Date.parse(per.from) : -Infinity, to = per.to ? Date.parse(per.to) + 86400000 : Infinity; return t >= f && t < to; }
+  return t >= Date.now() - +per.kind * 86400000;
+}
+function periodGames(p, per = periodOf(p)) { return Object.values(p.games || {}).filter((g) => inPeriod(g, per)); }
+function periodLabel(per) { if (per.kind === "custom") return `${per.from || "start"} to ${per.to || "today"}`; return (PERIODS.find(([k]) => k === per.kind) || PERIODS[0])[1]; }
+function periodBarHtml(p) {
+  const per = periodOf(p), all = Object.values(p.games || {}), n = periodGames(p).length, unknown = all.filter((g) => gameTime(g) === null).length;
+  return `<div class="perbar"><label class="f" style="margin:0">Period<select id="perSel">${PERIODS.map(([k, l]) => `<option value="${k}" ${k === per.kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <span class="perdates ${per.kind === "custom" ? "" : "hidden"}"><label class="f" style="margin:0">From<input type="date" id="perFrom" value="${esc(per.from || "")}"></label><label class="f" style="margin:0">To<input type="date" id="perTo" value="${esc(per.to || "")}"></label></span>
+    <span class="small muted">${n} of ${all.length} analysed game${all.length === 1 ? "" : "s"}${per.kind !== "all" && unknown ? ` · ${unknown} without a date are only in "All time"` : ""}</span></div>`;
+}
+function bindPeriodBar(v, p, tabName, arg) {
+  const s = $("#perSel", v); if (!s) return;
+  const set = (per) => { p.settings ||= {}; p.settings.period = per; save(); go(tabName, arg); };
+  s.onchange = () => { const k = s.value; if (k === "custom") { $(".perdates", v).classList.remove("hidden"); const per = { kind: "custom", from: $("#perFrom", v).value || null, to: $("#perTo", v).value || null }; p.settings.period = per; save(); return; } set({ kind: k }); };
+  const dates = () => set({ kind: "custom", from: $("#perFrom", v).value || null, to: $("#perTo", v).value || null });
+  $("#perFrom", v).onchange = dates; $("#perTo", v).onchange = dates;
+}
+
+// ------------------------------------------------------------------ TIMELINE (stats over time)
+function timelineData(games) {
+  const gs = games.map((g) => [gameTime(g), g]).filter(([t]) => t !== null).sort((a, b) => a[0] - b[0]);
+  if (gs.length < 2) return null;
+  const span = gs[gs.length - 1][0] - gs[0][0];
+  const weekly = span < 100 * 86400000;
+  const key = (t) => { const d = new Date(t); if (!weekly) return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; const m = new Date(t - ((d.getUTCDay() + 6) % 7) * 86400000); return m.toISOString().slice(0, 10); };
+  const B = new Map();
+  for (const [t, g] of gs) { const k = key(t); if (!B.has(k)) B.set(k, []); B.get(k).push(g); }
+  const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const rows = [...B.entries()].map(([k, list]) => {
+    const moves = list.reduce((a, g) => a + Object.values(g.phaseMoves || {}).reduce((x, y) => x + y, 0), 0);
+    const pst = list.filter((g) => g.pst?.me).map((g) => Object.values(g.pst.me).reduce((a, r) => [a[0] + r[0], a[1] + r[1]], [0, 0])).reduce((a, r) => [a[0] + r[0], a[1] + r[1]], [0, 0]);
+    const bl = list.reduce((a, g) => a + g.errors.filter((e) => e.label === "blunder").length, 0);
+    const elo = avg(list.map((g) => +g.playerElo).filter((x) => x > 0));
+    const label = weekly ? `week of ${new Date(k).toLocaleDateString(undefined, { day: "numeric", month: "short" })}` : new Date(k + "-01T00:00:00Z").toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: "UTC" });
+    return { k, label, n: list.length, score: Math.round(100 * avg(list.map((g) => g.score))), acc: avg(list.map((g) => g.accuracy).filter((x) => x != null)), cpl: pst[0] ? pst[1] / pst[0] : null, bl100: moves ? (100 * bl) / moves : null, elo };
+  });
+  return { weekly, rows };
+}
+function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
+  const pts = rows.map((r, i) => [i, f(r), r]).filter(([, y]) => y !== null && y !== undefined && isFinite(y));
+  if (pts.length < 2) return "";
+  const W = 320, H = 120, L = 34, R = 10, T = 12, Bm = 22;
+  let lo = Math.min(...pts.map((p) => p[1])), hi = Math.max(...pts.map((p) => p[1]));
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; } const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const X = (i) => L + (rows.length === 1 ? 0 : (i * (W - L - R)) / (rows.length - 1)), Y = (y) => T + (1 - (y - lo) / (hi - lo)) * (H - T - Bm);
+  const fmt = (y) => (+y).toFixed(digits) + unit;
+  const d = pts.map(([i, y], k) => `${k ? "L" : "M"}${X(i).toFixed(1)},${Y(y).toFixed(1)}`).join(" ");
+  const first = pts[0][1], last = pts[pts.length - 1][1], delta = last - first;
+  const good = better === "up" ? delta > 0 : delta < 0;
+  const ticks = [lo + pad, hi - pad];
+  return `<figure class="spark"><figcaption><b>${esc(title)}</b> <span class="small ${Math.abs(delta) < 1e-9 ? "muted" : good ? "up" : "down"}">${fmt(first)} → ${fmt(last)}</span></figcaption>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)} over time, from ${fmt(first)} to ${fmt(last)}">
+      ${ticks.map((t) => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" class="grid"/><text x="${L - 4}" y="${Y(t) + 3}" class="ax" text-anchor="end">${fmt(t)}</text>`).join("")}
+      <text x="${L}" y="${H - 6}" class="ax">${esc(rows[0].label)}</text><text x="${W - R}" y="${H - 6}" class="ax" text-anchor="end">${esc(rows[rows.length - 1].label)}</text>
+      <path d="${d}" class="ln"/>
+      ${pts.map(([i, y, r]) => `<g class="pt"><circle cx="${X(i)}" cy="${Y(y)}" r="4"/><circle cx="${X(i)}" cy="${Y(y)}" r="12" class="hit"><title>${esc(r.label)}: ${fmt(y)} (${r.n} game${r.n === 1 ? "" : "s"})</title></circle></g>`).join("")}
+    </svg></figure>`;
+}
+function timelineHtml(games) {
+  const D = timelineData(games);
+  if (!D) return `<div class="card"><h2>Progress over time</h2><p class="muted small">Needs games from at least two different ${"periods"} with a date. Load games over a longer period to see your progress.</p></div>`;
+  if (D.rows.length < 2) return `<div class="card"><h2>Progress over time</h2><p class="muted small">All these games are from the same ${D.weekly ? "week" : "month"}. Choose a longer period to see a trend.</p></div>`;
+  const r = D.rows;
+  return `<div class="card"><h2>Progress over time</h2><p class="small muted" style="margin-top:-6px">Per ${D.weekly ? "week" : "month"}, ${r.length} points. Hover or tap a point for its value and number of games; points with few games jump around more.</p>
+    <div class="sparks">${[
+      sparkHtml(r, (x) => x.elo, { title: "Rating (from your games)", better: "up" }),
+      sparkHtml(r, (x) => x.score, { title: "Score", unit: "%", better: "up" }),
+      sparkHtml(r, (x) => x.acc, { title: "Accuracy", digits: 1, better: "up" }),
+      sparkHtml(r, (x) => x.cpl, { title: "Centipawn loss (lower is better)", better: "down" }),
+      sparkHtml(r, (x) => x.bl100, { title: "Blunders per 100 moves (lower is better)", digits: 1, better: "down" }),
+    ].join("")}</div>
+    <details class="small"><summary>Show as a table</summary><div class="scroll"><table><tr><th>${D.weekly ? "Week" : "Month"}</th><th>Games</th><th>Rating</th><th>Score</th><th>Accuracy</th><th>CPL</th><th>Blunders/100</th></tr>
+      ${r.map((x) => `<tr><td>${esc(x.label)}</td><td>${x.n}</td><td>${x.elo ? Math.round(x.elo) : "–"}</td><td>${x.score}%</td><td>${x.acc != null ? x.acc.toFixed(1) : "–"}</td><td>${x.cpl != null ? Math.round(x.cpl) : "–"}</td><td>${x.bl100 != null ? x.bl100.toFixed(1) : "–"}</td></tr>`).join("")}</table></div></details></div>`;
+}
+
+// ------------------------------------------------------------------ MY GAMES (archive of analysed games)
+function mygames(v, arg) {
+  const p = P(); p.settings ||= {};
+  const F = (p.settings.gf ||= { tc: "", color: "", res: "", q: "" });
+  const per = periodOf(p);
+  let list = periodGames(p, per).filter((g) => (!F.tc || g.tc === F.tc) && (!F.color || g.color === F.color) && (!F.res || (F.res === "win" ? g.score === 1 : F.res === "loss" ? g.score === 0 : g.score === 0.5)));
+  if (F.q) { const q = F.q.toLowerCase(); list = list.filter((g) => [g.white, g.black, g.opening, g.date].join(" ").toLowerCase().includes(q)); }
+  list.sort((a, b) => (gameTime(b) ?? 0) - (gameTime(a) ?? 0));
+  const sel = arg && arg.id && p.games[arg.id];
+  const tcs = [...new Set(Object.values(p.games || {}).map((g) => g.tc).filter(Boolean))];
+  const dt = (g) => (gameTime(g) === null ? "date unknown" : new Date(gameTime(g)).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }));
+  const resW = (g) => (g.score === 1 ? "Won" : g.score === 0 ? "Lost" : "Draw");
+  v.innerHTML = `${sel ? gameDetailHtml(sel, dt, resW) : ""}
+  <div class="card"><h2>My games</h2><p class="small muted" style="margin-top:-6px">Every game that has been analysed is kept here, also when you later load a shorter period. Choose which ones count with the period: Report, Compare and Weak points use the same period.</p>
+    ${periodBarHtml(p)}
+    <div class="row gfilt" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <label class="f">Time control<select id="gfTc"><option value="">All</option>${tcs.map((c) => `<option value="${c}" ${F.tc === c ? "selected" : ""}>${esc(TC_LABEL[c] || c)}</option>`).join("")}</select></label>
+      <label class="f">Colour<select id="gfCol"><option value="">Both</option><option value="w" ${F.color === "w" ? "selected" : ""}>White</option><option value="b" ${F.color === "b" ? "selected" : ""}>Black</option></select></label>
+      <label class="f">Result<select id="gfRes"><option value="">All</option><option value="win" ${F.res === "win" ? "selected" : ""}>Won</option><option value="draw" ${F.res === "draw" ? "selected" : ""}>Draw</option><option value="loss" ${F.res === "loss" ? "selected" : ""}>Lost</option></select></label>
+      <label class="f" style="flex:1;min-width:160px">Search<input id="gfQ" value="${esc(F.q)}" placeholder="opponent or opening"></label></div>
+    <p class="small"><b>${list.length}</b> game${list.length === 1 ? "" : "s"} shown. <span class="muted">Accuracy is the Lichess formula (0-100). <span class="pill blunder">n</span> blunders, <span class="pill mistake">n</span> mistakes. Tap a game to replay it.</span></p>
+    ${list.length ? `<div class="glist">${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const e = (l) => g.errors.filter((x) => x.label === l).length;
+      return `<button class="grow ${sel && sel.id === g.id ? "on" : ""}" data-gid="${esc(g.id)}"><span class="gres ${resW(g).toLowerCase()}">${resW(g)}</span>
+        <span class="gmain"><b>vs ${esc(opp || "?")}</b> <span class="muted small">${esc(g.opponentElo || "")}</span><br><span class="small muted">${dt(g)} · ${g.color === "w" ? "White" : "Black"} · ${esc(TC_LABEL[g.tc] || g.tc || "")}${g.timeControl && g.timeControl !== "-" ? ` ${esc(fmtTc(g.timeControl))}` : ""}<br>${esc(g.opening || "")}</span></span>
+        <span class="gnum"><b>${g.accuracy ?? "–"}</b><span class="small muted">accuracy</span><span><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></span></span></button>`; }).join("")}</div>` : `<p class="muted">No games match. Change the period or the filters, or load games on the Games tab.</p>`}</div>`;
+  bindPeriodBar(v, p, "mygames");
+  const setF = (k, val) => { F[k] = val; save(); go("mygames"); };
+  $("#gfTc", v).onchange = (e) => setF("tc", e.target.value); $("#gfCol", v).onchange = (e) => setF("color", e.target.value); $("#gfRes", v).onchange = (e) => setF("res", e.target.value);
+  let qt; $("#gfQ", v).oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { F.q = e.target.value; save(); go("mygames"); setTimeout(() => { const i = $("#gfQ"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }); }, 400); };
+  v.querySelectorAll("[data-gid]").forEach((b) => (b.onclick = () => { go("mygames", { id: b.dataset.gid }); window.scrollTo({ top: 0 }); }));
+  if (sel) bindGameDetail(v, sel);
+}
+function gameDetailHtml(g, dt, resW) {
+  const opp = g.color === "w" ? g.black : g.white;
+  const ser = g.errors.filter((e) => e.label !== "inaccuracy");
+  return `<div class="card gdetail"><div class="row" style="justify-content:space-between;align-items:flex-start"><h2 style="margin:0">${resW(g)} vs ${esc(opp || "?")}</h2><button class="btn secondary small" id="gdClose">Close</button></div>
+    <p class="small muted">${dt(g)} · you played ${g.color === "w" ? "White" : "Black"} · ${esc(g.opening || "")}${g.termination ? ` · ${esc(g.termination)}` : ""}${g.site && /^https?:/.test(g.site) ? ` · <a href="${esc(g.site)}" target="_blank" rel="noopener">open on the site</a>` : ""}</p>
+    <div class="stats"><div class="stat"><div class="v">${g.accuracy ?? "–"}</div><div class="l">accuracy</div></div>
+      <div class="stat"><div class="v">${g.pst?.me ? Math.round(Object.values(g.pst.me).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.me).reduce((a, r) => a + r[0], 0))) : "–"}</div><div class="l">centipawn loss${g.pst?.opp ? ` · opponent ${Math.round(Object.values(g.pst.opp).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.opp).reduce((a, r) => a + r[0], 0)))}` : ""}</div></div>
+      <div class="stat"><div class="v">${ser.length}</div><div class="l">mistakes + blunders</div></div></div>
+    ${g.san ? `<div class="gd2"><div><div id="gdBoard"></div><div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary small" id="gdStart">⏮</button><button class="btn secondary small" id="gdBack">◀</button><button class="btn secondary small" id="gdFwd">▶</button><button class="btn secondary small" id="gdEnd">⏭</button><button class="btn secondary small" id="gdBoardOpen">Open on Board</button></div></div>
+      <div><div class="small muted">Tap a move to see the position. <span style="color:var(--bad);font-weight:700">Red</span> = blunder, <span style="color:#b5651d;font-weight:650">orange</span> = mistake, <span style="text-decoration:underline dotted">dotted</span> = inaccuracy.</div><div class="gdmoves" id="gdMoves"></div><div id="gdNote" class="small" style="margin-top:8px"></div></div></div>`
+      : `<p class="small muted">The full move list is kept for games analysed from v33 on. For this game, open the mistakes below.</p>`}
+    ${ser.length ? `<h3>Mistakes and blunders</h3>${ser.map((e) => `<div class="list-item weak errrow"><div><b>Move ${e.moveNo}: ${esc(e.played)}</b> <span class="muted">best was</span> <b>${esc(e.best || "?")}</b> <span class="pill ${e.label}">${e.label} −${Math.round(e.drop)}%</span><div class="small muted">${esc(PH_NAME[e.phase] || e.phase || "")}${(e.tags || []).length ? ` · ${esc(e.tags.join(", "))}` : ""}</div></div><button class="btn secondary small" data-errfen="${esc(e.fen)}">Open on board</button></div>`).join("")}` : `<p class="small">No mistakes or blunders in this game.</p>`}</div>`;
+}
+function bindGameDetail(v, g) {
+  $("#gdClose", v).onclick = () => go("mygames");
+  v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
+  if (!g.san) return;
+  const brd = new Board($("#gdBoard", v), { interactive: false }); brd.setOrientation(g.color);
+  const fens = [new Chess().fen()], lasts = [null]; const c = new Chess();
+  for (const s of g.san) { try { const m = c.move(s); fens.push(c.fen()); lasts.push([m.from, m.to]); } catch { break; } }
+  const errAt = {}; for (const e of g.errors) { const ply = (e.moveNo - 1) * 2 + (e.color === "w" ? 0 : 1); errAt[ply] = e; }
+  let i = 0;
+  const box = $("#gdMoves", v);
+  box.innerHTML = g.san.map((s, k) => `${k % 2 === 0 ? `<span class="mn">${k / 2 + 1}.</span>` : ""}<button class="mv ${errAt[k] ? errAt[k].label : ""}" data-ply="${k + 1}">${esc(s)}</button>`).join(" ");
+  const show = () => { brd.setFen(fens[i], { last: lasts[i] }); box.querySelectorAll(".mv").forEach((b) => b.classList.toggle("cur", +b.dataset.ply === i));
+    const e = errAt[i - 1]; $("#gdNote", v).innerHTML = e ? `<div class="feedback ${e.label === "inaccuracy" ? "info" : "warn"}"><b>${esc(e.played)}</b> was ${e.label === "inaccuracy" ? "an" : "a"} ${e.label} (−${Math.round(e.drop)}% win chance). Better was <b>${esc(e.best || "?")}</b>${e.bestLine ? `: ${esc(e.bestLine)}` : ""}.</div>` : ""; };
+  box.querySelectorAll(".mv").forEach((b) => (b.onclick = () => { i = +b.dataset.ply; show(); }));
+  $("#gdStart", v).onclick = () => { i = 0; show(); }; $("#gdEnd", v).onclick = () => { i = fens.length - 1; show(); };
+  $("#gdBack", v).onclick = () => { i = Math.max(0, i - 1); show(); }; $("#gdFwd", v).onclick = () => { i = Math.min(fens.length - 1, i + 1); show(); };
+  $("#gdBoardOpen", v).onclick = () => go("board", { fen: fens[i] });
+  show();
+}
+
 // ------------------------------------------------------------------ COMPARE
 let cmpExtern = null; // players read from a backup file (kept in memory only, never saved)
 function compare(v) {
@@ -1025,10 +1250,12 @@ function compare(v) {
       <label class="f">Compare ${esc(me.name)} with<select id="cmpWho">${others.length ? others.map((o) => `<option value="${esc(o.key)}" ${pick && o.key === pick.key ? "selected" : ""}>${esc(o.name)}</option>`).join("") : `<option value="">(no other player yet)</option>`}</select></label>
       <label class="f">Time controls<select id="cmpTc"><option value="">All</option>${TC_CATS.map((c) => `<option value="${c}" ${c === tcSel ? "selected" : ""}>${TC_LABEL[c]}</option>`).join("")}</select></label>
       <label class="btn secondary" style="cursor:pointer">Load a player from a backup file<input type="file" id="cmpFile" accept=".json" class="visually-hidden"></label></div>
+    ${periodBarHtml(me)}
     <p class="small muted">To compare with a friend, a coach or a stronger player: add them as a player (player menu at the top → "+ New player"), fill in their Lichess or Chess.com name and load their games. Or load a backup file they sent you (Home → Log &amp; backup); it is only read here, not saved.</p>`;
   if (!pick) { v.innerHTML = `<div class="card"><h2>Who to compare</h2>${pickHtml}</div>`; bindCompare(v, me); return; }
   const other = pick.p;
-  const sel = (p) => Object.values(p.games || {}).filter((g) => !tcSel || g.tc === tcSel);
+  const cmpPer = periodOf(me);
+  const sel = (p) => Object.values(p.games || {}).filter((g) => (!tcSel || g.tc === tcSel) && inPeriod(g, cmpPer));
   const ga = sel(me), gb = sel(other);
   const A = ga.length ? aggregate(ga) : null, B = gb.length ? aggregate(gb) : null;
   const TA = testSummary(me, A), TB = testSummary(other, B);
@@ -1085,6 +1312,7 @@ function compare(v) {
   bindCompare(v, me);
 }
 function bindCompare(v, me) {
+  bindPeriodBar(v, me, "compare");
   $("#cmpWho", v).onchange = (e) => { me.settings.cmpWith = e.target.value; save(); go("compare"); };
   $("#cmpTc", v).onchange = (e) => { me.settings.cmpTc = e.target.value; save(); go("compare"); };
   $("#cmpFile", v).onchange = async (e) => { const f = e.target.files[0]; if (!f) return;

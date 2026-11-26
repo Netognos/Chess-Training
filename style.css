@@ -344,3 +344,53 @@ a { color: var(--link); }
 .lbhelp { color: var(--felt); font-weight: 650; font-size: 12.5px; }
 @media (max-width: 900px) { .desk-only { display: none; } }
 .binfo-in > div:last-child { position: sticky; bottom: -12px; background: var(--card); padding: 8px 0 2px; }
+/* period bar, timeline, my games */
+.perbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.perbar .perdates { display: flex; gap: 8px; }
+.perbar select, .perbar input { min-width: 140px; }
+.sparks { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 8px 0; }
+.spark { margin: 0; }
+.spark figcaption { font-size: 13px; margin-bottom: 2px; }
+.spark figcaption .up { color: var(--good); font-weight: 650; } .spark figcaption .down { color: var(--bad); font-weight: 650; }
+.spark svg { width: 100%; height: auto; display: block; overflow: visible; }
+.spark .grid { stroke: var(--line); stroke-width: 1; }
+.spark .ax { font-size: 10px; fill: var(--muted); }
+.spark .ln { fill: none; stroke: var(--felt); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.spark .pt circle { fill: var(--felt); stroke: var(--card); stroke-width: 2; }
+.spark .pt circle.hit { fill: transparent; stroke: none; cursor: pointer; }
+.spark .pt:hover circle:first-child { r: 6; }
+.glist { display: grid; gap: 6px; }
+.grow { display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: center; text-align: left; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; cursor: pointer; }
+.grow.on { border-color: var(--felt); box-shadow: inset 0 0 0 1px var(--felt); }
+.grow .gres { font-weight: 700; font-size: 13px; text-align: center; border-radius: 8px; padding: 4px 0; }
+.grow .gres.won { background: color-mix(in srgb, var(--good) 18%, transparent); }
+.grow .gres.lost { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.grow .gres.draw { background: var(--soft); }
+.grow .gnum { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.gd2 { display: grid; grid-template-columns: minmax(0, 360px) 1fr; gap: 14px; margin: 10px 0; }
+@media (max-width: 700px) { .gd2 { grid-template-columns: 1fr; } }
+.gdmoves { line-height: 2; max-height: 340px; overflow: auto; }
+.gdmoves .mn { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.gdmoves .mv { background: none; border: 0; padding: 2px 4px; border-radius: 4px; font: inherit; color: var(--ink); cursor: pointer; }
+.gdmoves .mv.cur { background: var(--felt); color: var(--felt-ink); }
+.gdmoves .mv.blunder { color: var(--bad); font-weight: 700; } .gdmoves .mv.mistake { color: #b5651d; font-weight: 650; } .gdmoves .mv.inaccuracy { text-decoration: underline dotted; }
+#playerSelect { min-width: 132px; max-width: 46vw; text-overflow: ellipsis; }
+#installBtn { background: transparent; color: inherit; border-color: color-mix(in srgb, currentColor 40%, transparent); }
+.subnav.more-r { mask-image: linear-gradient(90deg, #000 82%, transparent); -webkit-mask-image: linear-gradient(90deg, #000 82%, transparent); }
+.subnav.more-l.more-r { mask-image: linear-gradient(90deg, transparent, #000 10%, #000 82%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 82%, transparent); }
+.subnav.more-l:not(.more-r) { mask-image: linear-gradient(90deg, transparent, #000 14%); -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%); }
+main#view, #view { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+.insh ol, .insh ul { margin: 4px 0 10px; padding-left: 20px; } .insh li { margin: 4px 0; }
+.moretoggle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 14px; }
+.ptask { margin-bottom: 8px; max-width: 480px; }
+.ptask:empty { display: none; }
+.pmore { margin-top: 10px; } .pmore summary { font-size: 13.5px; cursor: pointer; color: var(--felt); font-weight: 600; }
+#pfb:not(:empty) { margin-top: 8px; max-width: 480px; }
+/* the coordinate number stays readable above pieces */
+.board .coord { z-index: 2; text-shadow: 0 0 2px var(--light), 0 0 2px var(--light); }
+.board .mark.star { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: clamp(18px, 6vw, 34px); color: #e3a21a; text-shadow: 0 1px 2px rgba(0,0,0,.35); pointer-events: none; z-index: 2; }
+.board .mark.hl { position: absolute; inset: 0; box-shadow: inset 0 0 0 3px #e3a21a; pointer-events: none; }
+.lessons { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.lesson { display: flex; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 10px; padding: 10px; font: inherit; cursor: pointer; }
+.lesson .n { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--soft); font-weight: 750; flex: 0 0 auto; }
+.lesson.done .n { background: color-mix(in srgb, var(--good) 25%, transparent); color: var(--good); }
