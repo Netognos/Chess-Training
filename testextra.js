@@ -32,7 +32,7 @@ const ev = (cp) => (Math.abs(cp) >= 9000 ? (cp > 0 ? "mate" : "−mate") : (cp >
 const sanOf = (fen, uci) => { try { return new Chess(fen).move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san; } catch { return uci; } };
 
 // ------------------------------------------------------------------ STYLE
-export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext }) {
+export async function runStyle(v, C, o) { const { it, title, onRecord, nextLabel, onNext } = o;
   const fen = it.fen, stm = fen.split(" ")[1];
   const styleInfo = `<b>${stm === "w" ? "White" : "Black"} to move. Style position.</b><p>Several moves are good here, each of a different kind (calm, sharp, theoretical…). There's no wrong answer among them: play the move <b>you</b> would choose in a game by dragging or tapping it on the board. The test records which kind of move you prefer. Writing why is optional.</p>`;
   v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, title, stm)}<div id="tb"></div></div>
@@ -43,9 +43,9 @@ export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext })
       <div id="tfb"></div></div></div></div>`;
   const brd = new Board(v.querySelector("#tb")); brd.setFen(fen); brd.setOrientation(stm);
   bindStrip(v, brd, "style", styleInfo);
-  let t0 = Date.now(), pausedAt = brd.infoEl ? Date.now() : null;
+  let t0 = Date.now() - ((o.st && o.st.elapsed) || 0) * 1000, pausedAt = brd.infoEl ? Date.now() : null;
   brd.onInfo = (open) => { if (open) pausedAt = Date.now(); else if (pausedAt) { t0 += Date.now() - pausedAt; pausedAt = null; } };
-  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (o.st && s % 5 === 0 && s !== o.st.elapsed) { o.st.elapsed = s; C.save(); } }, 500);
   brd.onMove = async (mv) => {
     brd.locked = true; clearInterval(timer);
     const uci = mv.from + mv.to + (mv.promotion || "");
@@ -78,13 +78,13 @@ export async function runStyle(v, C, { it, title, onRecord, nextLabel, onNext })
 }
 
 // ------------------------------------------------------------------ DEEP
-export async function runDeep(v, C, { it, title, onRecord, nextLabel, onNext }) {
+export async function runDeep(v, C, o) { const { it, title, onRecord, nextLabel, onNext } = o;
   const fen = it.fen, stm = fen.split(" ")[1];
   const sol = it.sol, solSan = it.san;
-  const deepInfo = `<b>${stm === "w" ? "White" : "Black"} to move. Deep calculation.</b><p>In this line <b>every</b> move, yours and your opponent's, is the only good move. It is ${Math.ceil(sol.length / 2)} of your moves long. Put it on the board as far as you can see (the pieces stay put), including your opponent's only replies, then press <b>Submit</b>.</p>${LB_HELP}`;
+  const deepInfo = `<b>${stm === "w" ? "White" : "Black"} to move. Deep calculation.</b><p>In this line <b>every</b> move, yours and your opponent's, is the only good move. It is ${Math.ceil(sol.length / 2)} of your moves long. Put it on the board as far as you can see including your opponent's only replies, then press <b>Submit</b>.</p>${LB_HELP}`;
   v.innerHTML = `<div class="two"><div>${stripHtml(C.esc, title, stm)}<div id="tb"></div><div id="lbox"></div><div class="row" style="margin-top:8px" id="stepBtns"></div></div>
     <div><div class="card"><h2 class="desk-only">${C.esc(title)}</h2>
-      <p class="small"><b>Deep calculation.</b> In this line <b>every</b> move — yours and your opponent's — is the only good move: any other move throws away the win or loses. The line is ${Math.ceil(sol.length / 2)} of your moves long (${sol.length} half-moves). Put it on the board as far as you can see (the pieces stay put), including your opponent's only replies, then submit.</p>
+      <p class="small"><b>Deep calculation.</b> In this line <b>every</b> move — yours and your opponent's — is the only good move: any other move throws away the win or loses. The line is ${Math.ceil(sol.length / 2)} of your moves long (${sol.length} half-moves). Put it on the board as far as you can see including your opponent's only replies, then submit.</p>
       <label class="small">Your line</label><input id="line" placeholder="or type it: e.g. Rxf7 Kxf7 Qh5+ …" style="width:100%">
       <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit</button></div><div id="perr" class="small" style="color:var(--bad)"></div>
       <div id="tfb"></div></div></div></div>`;
@@ -93,9 +93,9 @@ export async function runDeep(v, C, { it, title, onRecord, nextLabel, onNext }) 
   const inp = v.querySelector("#line");
   const lb = new LineBuilder({ board: brd, rootFen: fen, el: v.querySelector("#lbox"), esc: C.esc, maxLines: 1, onChange: () => { if (!inp.dataset.manual) inp.value = lb.mainSan(); } });
   inp.oninput = () => { if (inp.value.trim()) inp.dataset.manual = "1"; else delete inp.dataset.manual; };
-  let t0 = Date.now(), pausedAt = brd.infoEl ? Date.now() : null;
+  let t0 = Date.now() - ((o.st && o.st.elapsed) || 0) * 1000, pausedAt = brd.infoEl ? Date.now() : null;
   brd.onInfo = (open) => { if (open) pausedAt = Date.now(); else if (pausedAt) { t0 += Date.now() - pausedAt; pausedAt = null; } };
-  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  const timer = setInterval(() => { const s = Math.floor(((pausedAt || Date.now()) - t0) / 1000); const el = v.querySelector("#timer"); if (!el) return clearInterval(timer); el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (o.st && s % 5 === 0 && s !== o.st.elapsed) { o.st.elapsed = s; C.save(); } }, 500);
   // engine already looks at the start position while you think
   C.engine().analyse(fen, { movetime: 600 }).catch(() => {});
   v.querySelector("#submit").onclick = async () => {

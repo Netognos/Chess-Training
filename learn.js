@@ -46,7 +46,7 @@ export const LESSONS = [
       { type: "reach", fen: "1k6/8/8/8/8/8/8/3QK3 w - - 0 1", targets: ["d7", "a4", "h4"], msg: "Collect all three stars." },
       { type: "reach", fen: "6k1/1p6/8/8/8/5p2/8/Q5K1 w - - 0 1", targets: ["b7", "f3"], msg: "Capture both pawns." },
     ] },
-  { id: "king", title: "The king", piece: "k", text: `<p>${HOW.k} If your king is attacked, you must deal with it right away. Losing the king (checkmate) loses the game.</p>`,
+  { id: "king", title: "The king", piece: "k", text: `<p>${HOW.k} If your king is attacked, you must deal with it right away. The king is never actually taken: when it is attacked and can't escape, that's checkmate, and the game is over.</p>`,
     ex: [
       { type: "reach", fen: "7k/8/8/8/8/8/8/K7 w - - 0 1", targets: ["c3"], msg: "Walk the king to the star (one square at a time)." },
       { type: "quiz", q: "May your king move to a square that an enemy piece attacks?", options: ["Yes, if it wants to", "No, never"], answer: 1, explain: "A king may never move into an attack. The game won't let you." },
@@ -54,7 +54,7 @@ export const LESSONS = [
   { id: "knight", title: "The knight", piece: "n", text: `<p>${HOW.n} A knight always lands on a square of the other colour.</p>`,
     ex: [
       { type: "reach", fen: "7k/8/8/8/8/8/8/1N4K1 w - - 0 1", targets: ["c3"], msg: "Jump to the star." },
-      { type: "reach", fen: "7k/8/8/8/8/8/8/1N4K1 w - - 0 1", targets: ["e4"], msg: "Now to this star: it takes two jumps." },
+      { type: "reach", fen: "7k/8/8/8/8/8/8/1N4K1 w - - 0 1", targets: ["e4"], par: 2, msg: "Now to this star: it takes two jumps." },
       { type: "reach", fen: "7k/8/8/3p4/8/2N5/8/6K1 w - - 0 1", targets: ["d5"], msg: "Capture the pawn. (Hint: from c3, a knight can reach d5 in one jump.)" },
     ] },
   { id: "pawn", title: "The pawn", piece: "p", text: `<p>${HOW.p} When a pawn reaches the last row, it <b>promotes</b>: it becomes a queen (or rook, bishop or knight, your choice).</p>`,
@@ -63,7 +63,7 @@ export const LESSONS = [
       { type: "reach", fen: "7k/8/8/8/3p4/4P3/8/6K1 w - - 0 1", targets: ["d4"], msg: "Capture the black pawn: pawns capture diagonally forward." },
       { type: "reach", fen: "8/3P4/7k/8/8/8/8/6K1 w - - 0 1", targets: ["d8"], msg: "Promote the pawn: move it to the last row and choose a queen." },
     ] },
-  { id: "notation", title: "Reading moves", text: `<p>Moves are written with the piece letter and the square it goes to: <b>K</b> king, <b>Q</b> queen, <b>R</b> rook, <b>B</b> bishop, <b>N</b> knight (K is taken by the king). Pawns have no letter: <b>e4</b> is a pawn to e4.</p><p><b>x</b> means a capture, <b>+</b> check, <b>#</b> checkmate, <b>O-O</b> castling short, <b>O-O-O</b> castling long. A <b>?</b> marks a mistake, <b>!</b> a good move.</p>`,
+  { id: "notation", title: "Reading moves", text: `<p>Moves are written with the piece letter and the square it goes to: <b>K</b> king, <b>Q</b> queen, <b>R</b> rook, <b>B</b> bishop, <b>N</b> knight (K is taken by the king). Pawns have no letter: <b>e4</b> is a pawn to e4. A pawn that captures is written with the file it came from: <b>exd5</b> = the pawn from the e-file takes on d5.</p><p><b>x</b> means a capture, <b>+</b> check, <b>#</b> checkmate. <b>O-O</b> and <b>O-O-O</b> are castling (short and long), a special king move you'll learn in "Special moves". A <b>?</b> marks a mistake, <b>!</b> a good move.</p>`,
     ex: [
       { type: "quiz", q: "What does Nf3 mean?", options: ["A knight moves to f3", "A pawn moves to f3", "The king moves to f3"], answer: 0, explain: "N is the knight." },
       { type: "quiz", q: "What does Bxe5+ mean?", options: ["Bishop to e5", "Bishop captures on e5, with check", "Bishop captures on e5, checkmate"], answer: 1, explain: "x = capture, + = check." },
@@ -95,11 +95,24 @@ export const LESSONS = [
       { type: "mate", intro: "<b>Stalemate</b> is the classic way to throw away a won game: the other side has no legal move but isn't in check. That's a draw!", fen: "7k/8/6K1/8/8/8/8/5Q2 w - - 0 1", msg: "Give checkmate in one, and don't stalemate! (Qf7 would be stalemate.)", hint: "Check the king along the back row, where your king covers the escape squares." },
       { type: "quiz", intro: "<b>Draws</b>: a game can also end equal: by stalemate, by the same position three times, by 50 moves without a capture or pawn move, or when nobody has enough pieces left to checkmate.", q: "Black to move: the black king isn't in check, but has no legal move. What happens?", options: ["Black loses", "It's a draw (stalemate)", "Black skips a turn"], answer: 1, explain: "Stalemate is a draw. Careful when you're winning: leave the king a square!" },
     ] },
-  { id: "opening", title: "How to start a game", text: `<p>Three habits that make your first moves good:</p><ol><li><b>Take the centre</b> with a pawn (e4 or d4).</li><li><b>Develop</b>: bring knights and bishops out, towards the centre. Don't move the same piece twice without a reason.</li><li><b>Castle</b> early, so your king is safe.</li></ol><p>And on every move: <b>can my opponent take something of mine?</b> That one question saves most beginner games.</p>`,
+  { id: "tactics", title: "Winning pieces", text: `<p>Most games between beginners are decided by a piece left unprotected. Two simple ways to win one:</p><ol><li><b>Take what is free</b>: a piece nobody protects.</li><li><b>A fork</b>: one move that attacks two things at once. Your opponent can only save one.</li></ol><p>Before every move, look at what you can take, and what your opponent can take after your move.</p>`,
+    ex: [
+      { type: "best", fen: "4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1", ok: ["Qxd5"], msg: "One black piece is not protected. Take it.", hint: "Your queen looks straight up the d-file." },
+      { type: "best", fen: "q3k3/8/8/1N6/8/8/8/4K3 w - - 0 1", ok: ["Nc7+"], msg: "Find a knight move that attacks the king and the queen at the same time.", hint: "The knight jumps to a square two steps from both: look at c7." },
+      { type: "best", fen: "4k3/8/2n1n3/8/3P4/8/8/4K3 w - - 0 1", ok: ["d5"], msg: "A pawn can fork too. Attack both knights with one pawn move.", hint: "A pawn takes diagonally forward: which square touches c6 and e6?" },
+    ] },
+  { id: "opening", title: "How to start a game", text: `<p>Three habits that make your first moves good:</p><ol><li><b>Take the centre</b> (the four middle squares d4, e4, d5, e5) with a pawn: e4 or d4.</li><li><b>Develop</b>: bring knights and bishops out, towards the centre. Don't move the same piece twice without a reason.</li><li><b>Castle</b> early, so your king is safe.</li></ol><p>And on every move: <b>can my opponent take something of mine?</b> That one question saves most beginner games.</p>`,
     ex: [
       { type: "best", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", ok: ["e4", "d4"], msg: "Your first move: take the centre with a pawn.", hint: "The pawn in front of your king or queen, two squares." },
       { type: "best", fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1", ok: ["Nf3", "Nc3", "Bc4"], msg: "Now develop a piece towards the centre.", hint: "A knight or a bishop." },
       { type: "best", fen: "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1", ok: ["O-O"], msg: "Knight and bishop are out. Make your king safe.", hint: "Castle short." },
+    ] },
+  { id: "kqmate", title: "Mate with king and queen", text: `<p>When only your king and queen are left against a lone king, you can always win. The plan:</p><ol><li><b>Box the king in</b> with your queen, a knight's jump away from it. Each move, make the box smaller.</li><li>When the king is on the edge, <b>bring your own king</b> close (two squares in front of it).</li><li>Then <b>mate</b> with the queen on the edge, protected by your king.</li></ol><p><b>Watch out for stalemate:</b> if the king has no move and is not in check, it's a draw. Before each queen move, check the king still has a square.</p>`,
+    ex: [
+      { type: "mate", fen: "6k1/8/6K1/8/8/8/8/1Q6 w - - 0 1", msg: "Your king is close. Checkmate on the back row.", hint: "Your king guards f7, g7 and h7. Check along the 8th row." },
+      { type: "mate", fen: "k7/8/1K6/8/8/8/8/3Q4 w - - 0 1", msg: "Checkmate in one move.", hint: "Your king guards a7 and b7." },
+      { type: "mate", fen: "7k/8/5K2/6Q1/8/8/8/8 w - - 0 1", msg: "Mate with the queen next to the king, protected by your king.", hint: "g7 is next to the black king, and your king on f6 protects it." },
+      { type: "mate", fen: "3k4/8/3K4/8/8/8/8/7Q w - - 0 1", msg: "Checkmate in one move.", hint: "Your king takes c7, d7 and e7 away. Check along the back row." },
     ] },
 ];
 
@@ -164,7 +177,7 @@ function lessonView(v, id, C) {
   const finish = () => {
     p.learn[L.id] = true; delete at[L.id]; delete at[okKey]; C.save(); C.logEvent && C.logEvent("training", `Lesson done: ${L.title}`);
     bEl.innerHTML = ""; v.querySelector("#lxn").textContent = "Done";
-    v.querySelector("#lmsg").innerHTML = `<b>Lesson done!</b> ${ok} of ${L.ex.length} exercises right first time.`;
+    v.querySelector("#lmsg").innerHTML = `<b>Lesson done!</b> ${ok} of ${L.ex.filter((x) => x.type !== "show").length} exercises right first time.`;
     fb("ok", nextL ? `Next: <b>${C.esc(nextL.title)}</b>.` : "That was the last lesson. Time to play a game!");
     btns(nextL ? `<button class="btn" id="lnext">Next lesson</button><button class="btn secondary" id="lagain">Do it again</button>` : `<button class="btn" id="lplay">Play the computer</button>`);
     if (nextL) { v.querySelector("#lnext").onclick = () => C.go("learn", { lesson: nextL.id }); v.querySelector("#lagain").onclick = () => { at[L.id] = 0; C.go("learn", { lesson: L.id }); }; }
@@ -180,7 +193,7 @@ function lessonView(v, id, C) {
     v.querySelector("#lxn").textContent = `Exercise ${k + 1} of ${L.ex.length}`;
     fb("", ""); btns(""); top();
     const intro = E.intro ? `<div class="small" style="margin-bottom:6px">${E.intro}</div>` : "";
-    const advance = () => { if (first) ok++; k++; btns(`<button class="btn" id="lgo">${k >= L.ex.length ? "Finish" : "Next exercise"}</button>`); v.querySelector("#lgo").onclick = show; };
+    const advance = () => { if (first && E.type !== "show") ok++; k++; btns(`<button class="btn" id="lgo">${k >= L.ex.length ? "Finish" : "Next exercise"}</button>`); v.querySelector("#lgo").onclick = show; };
     const miss = () => { first = false; };
     if (E.type === "quiz") {
       bEl.innerHTML = ""; brd = null;
@@ -194,25 +207,27 @@ function lessonView(v, id, C) {
     }
     bEl.innerHTML = ""; const el = document.createElement("div"); bEl.appendChild(el);
     brd = new Board(el, { orientation: "w" });
-    let left = (E.targets || []).slice();
-    const reset = () => { left = (E.targets || []).slice(); brd.setFen(E.fen); brd.setMarks(Object.fromEntries(left.map((s) => [s, "star"]))); brd.locked = false; fb("", ""); };
+    let left = (E.targets || []).slice(), nMv = 0;
+    const reset = () => { left = (E.targets || []).slice(); nMv = 0; brd.setFen(E.fen); brd.setMarks(Object.fromEntries(left.map((s) => [s, "star"]))); brd.locked = false; fb("", ""); };
     reset();
     v.querySelector("#lmsg").innerHTML = `${intro}<b>${C.esc(E.msg)}</b>`;
     if (idx <= 1 || L.piece) v.querySelector("#lmsg").insertAdjacentHTML("beforeend", LEGEND);
     if (E.type === "show") { brd.locked = true; btns(`<button class="btn" id="lgot">Got it</button>`); v.querySelector("#lgot").onclick = () => { k++; show(); }; return; }
     const helpBtns = () => btns(`${E.hint ? `<button class="btn secondary small" id="lhint">Hint</button>` : ""}<button class="btn secondary small" id="lreset">Start this exercise again</button>`);
     helpBtns();
-    const bindHelp = () => { const h = v.querySelector("#lhint"); if (h) h.onclick = () => fb("info", C.esc(E.hint)); const r = v.querySelector("#lreset"); if (r) r.onclick = reset; };
+    const bindHelp = () => { const h = v.querySelector("#lhint"); if (h) h.onclick = () => { miss(); fb("info", C.esc(E.hint)); }; const r = v.querySelector("#lreset"); if (r) r.onclick = reset; };
     bindHelp();
     brd.onIllegal = (from, to, pc) => {
+      if (pc.color === "w") miss();
       if (pc.color !== "w") return fb("info", "That's a black piece: you play White here.");
       if (brd.chess.inCheck()) return fb("info", "Your king is in check! First get out of check: move the king, capture the piece that gives check, or block it.");
       fb("info", `The ${PN[pc.type]} can't go there. ${HOW[pc.type]}`);
     };
     brd.onMove = (m, before) => {
       if (E.type === "reach") {
+        if (!left.includes(m.to)) nMv++;
         if (!left.includes(m.to)) fb("info", E.targets.length > 1 || /two|jumps|walk/i.test(E.msg) || m.piece === "k" ? `You moved ${say(m)}. Keep going.` : `You moved ${say(m)}: a legal move, but not to the star. Keep going from here, or start again.`);
-        else { left = left.filter((s) => s !== m.to); fb("ok", left.length ? "★ Got it! Next star." : "★ Well done!"); }
+        else { left = left.filter((s) => s !== m.to); nMv++; const over = E.par && !left.length && nMv > E.par; if (over) miss(); fb("ok", left.length ? "★ Got it! Next star." : over ? `★ You got there in ${nMv} moves. It can be done in ${E.par}: try it again later.` : "★ Well done!"); }
         // you keep the move: White to move again (the black pieces stand still in these exercises)
         const parts = brd.fen().split(" "); parts[1] = "w"; parts[3] = "-";
         try { brd.setFen(parts.join(" "), { last: [m.from, m.to] }); } catch { brd.setFen(before); }
@@ -232,7 +247,7 @@ function lessonView(v, id, C) {
         const esc2 = chk ? brd.chess.moves({ verbose: true }) : [];
         const kEsc = esc2.filter((x) => x.piece === "k").map((x) => x.to), capChk = esc2.find((x) => x.captured && x.to === m.to), blk = esc2.find((x) => x.piece !== "k" && !x.captured);
         if (!chk && brd.chess.isStalemate()) fb("bad", `Careful: that's <b>stalemate</b>. The king isn't in check but has no legal move, so the game is a draw. Try again: give check.`);
-        else fb("bad", chk ? `${C.esc(Cap(say(m)))} is check, but not mate: ${kEsc.length ? `the king can escape to ${kEsc.join(" or ")}` : capChk ? `your piece can be taken (${capChk.san})` : blk ? `the check can be blocked (${blk.san})` : "there's a way out"}. Try again.` : `${C.esc(Cap(say(m)))} is not check. Checkmate always starts with a check. Try again.`);
+        else fb("bad", chk ? `${C.esc(Cap(say(m)))} is check, but not mate: ${kEsc.length ? (() => { const kc = esc2.filter((x) => x.piece === "k" && x.captured && x.to === m.to); const run = kEsc.filter((t) => t !== m.to); return kc.length ? `the king can take your ${PN[m.piece]} on ${m.to} (nothing protects it)${run.length ? `, or escape to ${run.join(" or ")}` : ""}` : `the king can escape to ${kEsc.join(" or ")}`; })() : capChk ? `your piece can be taken (${capChk.san})` : blk ? `the check can be blocked (${blk.san})` : "there's a way out"}. Try again.` : `${C.esc(Cap(say(m)))} is not check. Checkmate always starts with a check. Try again.`);
         setTimeout(() => brd.setFen(E.fen), 1200); return;
       }
       if (E.type === "best") {
@@ -280,7 +295,10 @@ function playView(v, C) {
   };
   const end = (res, msg) => {
     over = true; st.moves = []; brd.locked = true; v.querySelector("#pst").textContent = "Game over";
-    fb(res === "win" ? "ok" : res === "loss" ? "bad" : "info", `${msg}<div class="row" style="gap:8px;margin-top:8px">${res === "win" && st.level < LEVELS.length ? `<button class="btn small" id="gup">Try level ${st.level + 1}</button>` : ""}<button class="btn secondary small" id="grev">Look at my mistakes</button></div>`);
+    const winsHere = (p.learn.games || []).filter((x) => x.level === st.level && x.res === "win").length + (res === "win" ? 1 : 0);
+    const upOk = res === "win" && st.level < LEVELS.length;
+    fb(res === "win" ? "ok" : res === "loss" ? "bad" : "info", `${msg}${upOk ? `<div class="small" style="margin-top:4px">${winsHere >= 2 ? `That's ${winsHere} wins at this level: time to go one up.` : "One win at this level. Win once more, then go one level up (or try it now)."}</div>` : ""}<div class="row" style="gap:8px;margin-top:8px">${upOk ? `<button class="btn small ${winsHere >= 2 ? "" : "secondary"}" id="gup">Try level ${st.level + 1}</button>` : ""}${!(upOk && winsHere >= 2) ? `<button class="btn small" id="gagain">Play again</button>` : ""}<button class="btn secondary small" id="grev">Look at my mistakes</button></div>`);
+    const ag = v.querySelector("#gagain"); if (ag) ag.onclick = () => start(false);
     const rv = v.querySelector("#grev"); if (rv && C.analysePgn) rv.onclick = () => {
       const c = brd.chess, d = C.today().replace(/-/g, ".");
       const H = { Event: "Game vs computer", Site: "computer-" + Date.now(), Date: d, White: st.color === "w" ? p.name : `Computer level ${st.level}`, Black: st.color === "b" ? p.name : `Computer level ${st.level}`, Result: c.isCheckmate() ? (c.turn() === "w" ? "0-1" : "1-0") : "1/2-1/2" };
@@ -311,7 +329,7 @@ function playView(v, C) {
     if (my !== gen || over) return;
     const r = brd.play({ from: mv.from, to: mv.to, promotion: mv.promotion || "q" });
     thinking = false; if (!status()) brd.locked = false;
-    if (r && r.captured) fb("info", `The computer took your ${PN[r.captured]} with ${C.esc(r.san)}.`);
+    if (r && !over) fb("info", r.captured ? `The computer took your ${PN[r.captured]} with ${C.esc(r.san)}.` : `The computer played ${C.esc(say(r))}${r.san.endsWith("+") ? ": you're in check!" : "."}`);
   };
   brd.onMove = () => { fb("", ""); if (status()) return; pick(); };
   brd.onIllegal = (from, to, pc) => { if (pc.color !== st.color) return; fb("info", `The ${PN[pc.type]} can't go there${brd.chess.inCheck() ? " (you're in check: first get out of check)" : ""}. ${HOW[pc.type]}`); };

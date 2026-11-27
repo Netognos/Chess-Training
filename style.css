@@ -413,3 +413,7 @@ main#view, #view { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 .plegend span { display: inline-flex; align-items: center; gap: 4px; }
 .promo button { display: inline-flex; flex-direction: column; align-items: center; }
 .promo .plab { font-size: 10px; color: var(--ink); }
+/* keep scrolled-to things clear of the sticky header/subnav and the fixed bottom bar on phones */
+html { scroll-padding-top: calc(var(--hdr, 52px) + 7px + var(--sub, 46px) + 6px); scroll-padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+@media (min-width: 980px) { html { scroll-padding-bottom: 12px; } }
+@media (max-width: 979px) { #lb { max-width: min(100%, calc(100svh - 300px)); margin: 0 auto; } }

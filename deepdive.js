@@ -68,7 +68,7 @@ export const THEMES = {
   },
   opening: {
     title: "Errors in the opening",
-    what: "Mistakes and blunders before the middlegame starts: often a known trap, a wrong move order, or leaving the king in the centre too long.",
+    what: "Positional mistakes and blunders before the middlegame starts (tactical ones in the opening are under Tactics, and on the Report these count as positional/planning): often a known trap, a wrong move order, or leaving the king in the centre too long.",
     why: "At club level you don't need more theory, you need the ideas: why the moves are played. Most opening errors are breaking a basic principle, not forgetting move 14 of a line.",
     principles: [
       ["Develop, castle, connect the rooks", "Knights and bishops out first, king to safety, then the rooks. Count your developed pieces against your opponent's."],
@@ -167,7 +167,7 @@ export function patterns(key, D) {
   if (behind >= 2 && pct(behind, n) >= 30) out.push(`${behind} (${pct(behind, n)}%) came when you were already worse: under pressure, defending accurately is the weak spot.`);
   const pc = {}; for (const e of E) { const k = pieceOf(e.played); pc[k] = (pc[k] || 0) + 1; }
   const top = Object.entries(pc).sort((a, b) => b[1] - a[1])[0];
-  if (top && n >= 3 && pct(top[1], n) >= 35) out.push(`In ${top[1]} of them (${pct(top[1], n)}%) the move you played was a ${PIECE[top[0]]} move.`);
+  if (top && n >= 3 && pct(top[1], n) >= 35 && !(key === "positional" && top[0] === "P")) out.push(`In ${top[1]} of them (${pct(top[1], n)}%) the move you played was a ${PIECE[top[0]]} move.`);
   if (key === "tactical") {
     const missed = E.filter((e) => /[x+#]/.test(e.best || "")).length, allowed = E.filter((e) => (e.tags || []).some((t) => /hung|allowed/.test(t))).length;
     out.push(`In ${missed} (${pct(missed, n)}%) the better move was itself a check or capture: a forcing move you didn't find. In ${allowed} (${pct(allowed, n)}%) your move left material or mate to your opponent.`);
@@ -212,7 +212,7 @@ export function explain(e) {
   if (t.some((x) => /allowed mate/.test(x))) out.push(`${pl} allowed a mate: look at your king's escape squares and their checks.`);
   if (t.includes("time trouble")) out.push(`You had ${e.clock != null ? `${e.clock}s` : "little time"} left: in time trouble, keep it simple and safe.`);
   if (e.evalBefore >= 2) out.push(`You were winning (${e.evalBefore > 0 ? "+" : ""}${e.evalBefore}). When ahead: remove your opponent's counterplay first, then simplify.`);
-  if (!out.length && pieceOf(pl) === "P") out.push(`${pl} is a pawn move: it can't be undone and gives up squares. ${b} keeps the position flexible.`);
+  if (!out.length && pieceOf(pl) === "P") out.push(pieceOf(b) === "P" ? `Both are pawn moves, but ${pl} gives up the wrong squares: ${b} fits the position better.` : `${pl} is a pawn move: it can${"'"}t be undone and gives up squares. ${b} develops or improves a piece instead.`);
   if (!out.length) out.push(`${b} was better. The idea behind it shows in the engine line: ${e.bestLine || b}.`);
   return out;
 }

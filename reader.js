@@ -85,7 +85,7 @@ export function readPosition(fen) {
   const mine = forcing(ch);
   const oppBoard = ch.inCheck() ? null : withTurn(fen, other(turn));
   const theirs = oppBoard ? forcing(oppBoard) : [];
-  const fmt = (f) => `${f.san}${f.mate ? " (mate!)" : ""}${f.gain > 0 ? ` (wins ~${f.gain})` : ""}${f.promo ? " (promotes)" : ""}${f.check && !f.mate ? " (check)" : ""}`;
+  const fmt = (f) => `${f.san}${f.mate && !f.san.endsWith("#") ? " (mate!)" : ""}${f.gain > 0 ? ` (wins ~${f.gain})` : ""}${f.promo ? " (promotes)" : ""}${f.check && !f.mate ? " (check)" : ""}`;
   R.forcing = { mine, theirs };
   R.sections.threats = [
     ch.inCheck() ? `${side(turn)} is in CHECK: deal with that first.` : theirs.length ? `If ${side(other(turn))} could move now: ${theirs.map(fmt).join(", ")}.` : `${side(other(turn))} has no direct checks or winning captures.`,
@@ -162,10 +162,16 @@ export function readPosition(fen) {
   const myHanging = loose.filter((l) => l.color === me && l.critical);
   if (mine.some((f) => f.mate)) H.push("There is a MATE in one. Look at your checks!");
   if (myHanging.length) H.push(`Danger first: your ${myHanging.map((l) => `${NAME[l.piece]} on ${l.square}`).join(", ")} ${myHanging.length > 1 ? "are" : "is"} under attack. Save, defend or counter-attack, and only then make your plans.`);
-  if (freeCaps.length) H.push(`Free material? ${freeCaps.slice(0, 3).map((f) => f.san).join(", ")} seem to win material. Check that nothing of yours becomes loose afterwards (blunder check), and then just take it.`);
-  if (theirs.some((f) => f.gain > 0 || f.mate)) H.push(`Your opponent's threat: ${theirs.filter((f) => f.gain > 0 || f.mate).slice(0, 3).map(fmt).join(", ")}. Does your move stop this?`);
+  // a capture that walks into mate in one is not free
+  const matesAfter = (san) => { try { const t = new Chess(fen); t.move(san); return t.moves({ verbose: true }).some((x) => { const u = new Chess(t.fen()); u.move(x); return u.isCheckmate(); }); } catch { return false; } };
+  const oppMate = theirs.filter((f) => f.mate);
+  if (oppMate.length) H.push(`Your opponent threatens MATE (${oppMate.slice(0, 2).map(fmt).join(", ")}). Stop that first; material doesn't matter if you're mated.`);
+  const safeCaps = freeCaps.filter((f) => !matesAfter(f.san)), badCaps = freeCaps.filter((f) => matesAfter(f.san));
+  if (safeCaps.length) H.push(`Free material? ${safeCaps.slice(0, 3).map((f) => f.san).join(", ")} seem to win material. Check that nothing of yours becomes loose afterwards (blunder check)${oppMate.length ? ", and that it also stops the mate" : ", and then take it"}.`);
+  if (badCaps.length) H.push(`Careful: ${badCaps.slice(0, 3).map((f) => f.san).join(", ")} look${badCaps.length === 1 ? "s" : ""} free, but after it your opponent has mate in one.`);
+  if (theirs.some((f) => f.gain > 0 && !f.mate)) H.push(`Your opponent's threat: ${theirs.filter((f) => f.gain > 0 && !f.mate).slice(0, 3).map(fmt).join(", ")}. Does your move stop this?`);
   const twoMinors = minors(me) - minors(opp) === 2 && mat[opp].r - mat[me].r === 1;
-  if (myDiff >= 2) H.push("You're ahead in material. Remove counterplay first, then trade PIECES (not pawns). The fewer pieces on the board, the more your extra material counts." + (freeCaps.length ? " But grab the free material first." : ""));
+  if (myDiff >= 2) H.push("You're ahead in material. Remove counterplay first, then trade PIECES (not pawns). The fewer pieces on the board, the more your extra material counts." + (safeCaps.length && !oppMate.length ? " But grab the free material first." : ""));
   if (twoMinors && ks[opp].verdict !== "safe") H.push("Two minor pieces vs a rook, and the enemy king is weak: keep the queens on for now. Your pieces + queen attack better than the rook can defend.");
   else if (myDiff <= -2) H.push("You're behind in material. Avoid trades, look for activity, pressure on the king, complications, or a fortress.");
   if (ks[opp].verdict === "weak") H.push(`The ${side(opp).toLowerCase()} king is weak: bring pieces toward it (queen + one piece is often enough) and open lines toward it.`);

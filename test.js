@@ -109,7 +109,7 @@ export async function testView(v, C) {
       </div>
       ${p.tests.some((t) => t.done) ? `<div class="card"><h2>Your tests</h2><div class="scroll"><table><tr><th>Date</th><th>Test</th><th>Positions</th><th>Test rating</th><th></th></tr>
         ${p.tests.filter((t) => t.done).slice().reverse().map((t) => `<tr><td>${C.esc(t.date)}</td><td>${C.esc(MODES[t.mode]?.name || t.mode)}${t.stopped ? ' <span class="pill">stopped</span>' : ""}</td><td>${t.items.length}</td><td>${t.result && hasRated(t) ? t.result.overall : "–"}</td><td><button class="btn secondary small" data-res="${t.id}">Results</button></td></tr>`).join("")}</table></div></div>` : ""}
-      <div class="card" id="aiCard"></div>
+      ${aiKey() ? `<div class="card" id="aiCard"></div>` : `<details class="card"><summary><b>Optional: an AI coach that reads your reasoning</b> <span class="small muted">(needs a free Google key; the test works fine without it)</span></summary><div id="aiCard" style="margin-top:8px"></div></details>`}
       <div class="card"><h2>Training modules</h2><p class="small">Practise one category at a time around your level, without a test score. Your results appear in the Log.</p>
       <div class="row">${TAC_CATS.concat(Object.keys(POS_GROUPS)).concat(Object.keys(EXTRA_CATS)).map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">${C.esc(catLabel(c))}</button>`).join("")}</div></div>`;
     const tl = v.querySelector("#toLearn"); if (tl) tl.onclick = () => C.go("learn");
@@ -223,8 +223,11 @@ async function gradeLine(C, fen, user, sol, deadline) {
       const test = new Chess(before); test.move({ from: u.uci.slice(0, 2), to: u.uci.slice(2, 4), promotion: u.uci[4] });
       if (test.isCheckmate()) { own++; notes.push(`${u.san}: also mate. That works too!`); break; }
       const g = await C.gradeMove(before, u.uci, 700);
-      if (g.drop < 3) { own++; onSol = false; notes.push(`${u.san}: different from the solution, but the engine finds it just as good.`); pos.move(u.san); continue; }
-      notes.push(`${u.san} goes wrong here${g.punish ? `: after it, ${g.punish}` : ""}. Better was ${g.bestLine.split(" ")[0]} (your move costs ${g.drop.toFixed(0)}% chance to win).`); break;
+      // the engine's own choice, as good as it, or still clearly winning: sound
+      const keepsWin = g.afterCp >= 300 && g.drop < 15;
+      if (g.bestUci === u.uci || g.drop < 5 || keepsWin) { own++; onSol = false; notes.push(g.bestUci === u.uci || g.drop < 5 ? `${u.san}: ${matchPlies === k ? "different from the solution, but" : ""} the engine finds it just as good.`.replace(":  the", ": the") : `${u.san}: not the most precise (Stockfish prefers ${g.bestLine.split(" ")[0]}), but you stay clearly winning.`); pos.move(u.san); continue; }
+      { const b1 = g.bestLine.split(" ")[0];
+        notes.push(/#$/.test(b1) ? `${u.san} misses a checkmate: ${b1} mates at once. Always look at every check first.` : `${u.san} goes wrong here${g.punish ? `: after it, ${g.punish}` : ""}. Better was ${b1} (your move costs ${g.drop.toFixed(0)}% chance to win).`); } break;
     } else {
       const g = await C.gradeMove(before, u.uci, 500);
       if (g.drop >= 10) { notes.push(`You assumed ${u.san} for your opponent, but they have a stronger defence: ${g.bestLine.split(" ")[0]}. Your line stops being reliable here.`); break; }
@@ -263,7 +266,8 @@ async function runItem(v0, cur, C, opts) {
     const target = (est?.["Deep calculation"] ?? est?.overall ?? 1800) + (Math.random() * 160 - 80);
     const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
     const it = (pend && (await findExtra(slot.kind, pend))) || (await pickExtra(slot.kind, used, target, seenBefore(C.P(), cur)));
-    if (it && opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind }; C.save(); }
+    if (it && opts.test) { cur.pending = { idx: cur.items.length, id: it.id, kind: slot.kind, st: cur.pending?.id === it.id ? cur.pending.st || {} : {} }; C.save(); }
+    const st = opts.test && it ? cur.pending.st : null;
     if (!it) { v.innerHTML = `<div class="card"><p>No more positions of this kind.</p></div>`; return; }
     window.__ccItem = it;
     const title = opts.test ? `Position ${cur.items.length + 1} of ${cur.plan.length}` : `Practice: ${catLabel(slot.cat)}`;
@@ -277,7 +281,7 @@ async function runItem(v0, cur, C, opts) {
     const last = opts.test && cur.items.length + 1 >= cur.plan.length;
     const nextLabel = opts.test ? (last ? (cur.noQ ? "See the results" : "To the questionnaire") : "Next position") : "Next";
     const onNext = () => (opts.test ? C.go("test") : runItem(v0, cur, C, opts));
-    return (slot.kind === "style" ? runStyle : runDeep)(v, C, { it, title, onRecord, nextLabel, onNext });
+    return (slot.kind === "style" ? runStyle : runDeep)(v, C, { it, title, onRecord, nextLabel, onNext, st });
   }
   const pend = opts.test && cur.pending?.idx === cur.items.length && cur.pending.kind === slot.kind ? cur.pending.id : null;
   const it = (pend && (await findItem(slot.kind, pend))) || (await pickItem({ items: opts.used || cur.items, est, avoid: seenBefore(C.P(), cur) }, slot));
@@ -332,7 +336,11 @@ async function runItem(v0, cur, C, opts) {
     if (lb) { lb.destroy(); lb = null; v.querySelector("#lbox").innerHTML = ""; } brd.locked = true;
     let base;
     if (slot.kind === "pos") base = moveScore ?? 0;
-    else base = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
+    else {
+      base = depthStart === null ? 0 : depthStart >= nMine ? 1 : Math.min(1, (depthStart + 0.5 * Math.max(0, depthTotal - depthStart)) / nMine);
+      // the key (first) move is the hardest part: finding it is worth at least half
+      if (depthStart >= 1 && nMine > 1) base = Math.max(base, 0.5 + 0.5 * (depthStart - 1) / (nMine - 1));
+    }
     // partial credit for calculation that held up for a while, even if the first move was wrong
     let calcCredit = 0;
     if (calc && calc.accurate >= 2 && base < 0.4) { calcCredit = Math.min(slot.kind === "pos" ? 0.3 : 0.4, (slot.kind === "pos" ? 0.3 : 0.4) * calc.accurate / Math.max(6, sol.length)); base = Math.max(base, calcCredit); }
@@ -364,16 +372,18 @@ async function runItem(v0, cur, C, opts) {
       <div class="small" style="margin-top:6px">${slot.kind === "tac" ? `<b>Calculated from the start:</b> ${depthStart ?? 0} of ${nMine} of your moves${depthTotal > (depthStart ?? 0) ? ` · <b>with help</b> (after moves had been played): ${depthTotal} of ${nMine}` : ""}<br>` : ""}
       Score for this position: <b>${Math.round(score * 100)}%</b>${ai ? ` (move/line ${Math.round(base * 100)}% + understanding ${Math.round(ai.understanding * 100)}%)` : ""} · time to your answer: ${Math.round(rec.timeMs / 1000)} s · ${C.esc(catLabel(slot.cat))} · rating ≈ ${it.r}</div>
       ${allNotes.length ? `<ul class="small">${allNotes.map((n) => `<li>${C.esc(n)}</li>`).join("")}</ul>` : ""}</div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="nextIt0">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button><span class="small muted">or read the explanation below first</span></div>
       ${ai ? `<div class="card" style="margin-top:10px"><h3 style="margin-top:0">AI coach: how far did you see?</h3><ul class="small">${lvl("idea", "Idea (what the move does)")}${lvl("danger", "Danger (why the obvious follow-up fails / the opponent's defence)")}${lvl("followup", "Follow-up & plan")}</ul>
         ${ai.rejected ? `<p class="small"><b>Half right:</b> you didn't play the move, but you rejected it for the real danger.</p>` : ""}
         <p class="small">${C.esc(ai.feedback)}</p>${ai.missed ? `<p class="small"><b>Most important thing you missed:</b> ${C.esc(ai.missed)}</p>` : ""}</div>`
         : aiErr ? `<div class="feedback no small">AI coach unavailable: ${C.esc(aiErr)}</div>` : !aiKey() && (ideaTxt || lineTxt) ? `<p class="small muted">Tip: add a free Gemini key on the Test start page, and the AI coach will judge your reasoning (idea, danger, follow-up).</p>` : ""}
       ${sideHtml}
       ${explainHtml(x, C.esc)}
-      <p class="small muted">How the score works: your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%. Each extra line where your idea holds against another defence, or that you correctly marked ✗ (rejected), adds 5% (max 15%); a wrong first move with accurate calculation after it can still earn up to 40%.</p>
+      <details class="small muted"><summary>How the score works</summary>Your move/line counts for ${ai ? "half, and the depth of your understanding (idea 35%, danger 35%, follow-up 30%) for the other half" : "100% if you saw the whole line from the start; moves found only after help count for half; finding the key first move is worth at least 50%"}. Positional positions: the best move = 100%, an equally good alternative 70%, playable 40%. Each extra line where your idea holds against another defence, or that you correctly marked ✗ (rejected), adds 5% (max 15%); a wrong first move with accurate calculation after it can still earn up to 40%.</details>
       <div class="row"><button class="btn" id="nextIt">${opts.test ? (cur.items.length >= cur.plan.length ? "To the questionnaire" : "Next position") : "Next"}</button></div>`;
     stepper(solSan, fen);
     v.querySelector("#nextIt").onclick = () => (opts.test ? C.go("test") : runItem(v0, cur, C, opts));
+    v.querySelector("#nextIt0").onclick = () => v.querySelector("#nextIt").click();
   };
 
   const runCalc = async (moves) => {
@@ -392,12 +402,12 @@ async function runItem(v0, cur, C, opts) {
     const sfen = c.fen(); brd.setFen(sfen, { last }); brd.setOrientation(stm);
     const first = pre === 0;
     v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> <span class="muted">What you found yourself so far counts fully; the moves you add now count as found "with help" (you've seen the reply).</span></div>`}
-    if (!first) setTimeout(() => v.querySelector("#tb")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 50);
       ${first ? `<label class="f" style="margin-top:6px"><b style="color:var(--ink)">Your idea: what's going on and why?</b><textarea id="why" style="min-height:60px" placeholder="E.g. 'The black king has no escape squares, so after Rxf7 there's a back-rank mate'"></textarea></label>` : ""}
       <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${first ? "Your move, or your whole line" : "Continue the line"}</b>
       <input id="line" placeholder="e.g. Nd2, or a line: Rxf7 Kxf7 Qh5+ Kg8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <div id="perr" class="small" style="color:var(--bad);margin-top:4px"></div>
       <div class="row" style="margin-top:8px"><button class="btn" id="submit">Submit answer</button><button class="btn secondary" id="skip">${first ? "I don't know / skip" : "Show solution"}</button></div>`;
+    if (!first) setTimeout(() => v.querySelector("#tb")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 50);
     const inp = v.querySelector("#line");
     if (lb) lb.destroy();
     brd.locked = false;
@@ -450,8 +460,8 @@ async function runItem(v0, cur, C, opts) {
       stages++;
       if (slot.kind === "pos") {
         const u = parsed.moves[0];
-        if (u.uci === sol[0]) { moveScore = 1; allNotes.push(`${u.san}: exactly the move the grandmaster panel chose.`); }
-        else { const g = await Cg.gradeMove(fen, u.uci, 1200); moveScore = g.drop < 3 ? 0.7 : g.drop < 6 ? 0.4 : 0; allNotes.push(g.drop < 3 ? `${u.san}: a good alternative; the engine barely sees a difference.` : g.drop < 6 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance)${g.punish ? `: after it, ${g.punish}` : ""}.` : `${u.san}: not the right idea${g.punish ? `: after it, ${g.punish}` : ""} (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
+        if (u.uci === sol[0]) { moveScore = 1; allNotes.push(`${u.san}: exactly the move chosen by the panel of titled players.`); }
+        else { const g = await Cg.gradeMove(fen, u.uci, 1200); moveScore = g.drop < 4 ? 0.7 : g.drop < 10 ? 0.4 : 0; allNotes.push(g.drop < 4 ? `${u.san}: a good alternative; the engine barely sees a difference (70%).` : g.drop < 10 ? `${u.san}: playable, but not the best plan (−${g.drop.toFixed(0)}% win chance, 40%)${g.punish ? `: after it, ${g.punish}` : ""}.` : `${u.san}: not the right idea${g.punish ? `: after it, ${g.punish}` : ""} (−${g.drop.toFixed(0)}% win chance). The engine prefers ${g.bestLine.split(" ")[0]}.`); }
         if (parsed.moves.length > 2) { const gl = await gradeLine(Cg, fen, parsed.moves, sol); if (gl.own > 1) allNotes.push(`Your follow-up holds up for ${gl.own} of your moves.`); }
         if (moveScore < 0.4 && parsed.moves.length > 2) await runCalc(parsed.moves);
         return finish(moveScore >= 1 ? "Correct!" : moveScore > 0 ? "Partly right." : "Not the right move.");
@@ -573,11 +583,11 @@ export function resultsView(v, C, arg) {
     ${R.deep ? `<div class="stat"><div class="v">${R.deep.avg}/${R.deep.avgTotal}</div><div class="l">deep lines: half-moves seen / length</div></div>` : ""}
     ${R.time ? `<div class="stat"><div class="v">${R.time.median}s</div><div class="l">median time to first move</div></div>` : ""}</div>
     ${rated ? `<p class="small muted"><b>Test rating</b> = the rating at which your result would be "expected", worked out from the difficulty (rating) of each position and your score on it, the way a performance rating is calculated in a tournament. Test ratings come from the puzzle ratings (Lichess scale) and your scores. Lichess puzzle ratings tend to run somewhat higher than game ratings, and one test of ${t.items.length} positions gives an indication (±150), not an exact number. Compare above all your <b>categories with each other</b>.</p>` : ""}</div>
-    ${rows.length ? `<div class="card"><h2>Per category (weakest first)</h2><table>${rows.map(([c, x]) => `<tr><td>${C.esc(catLabel(c))}</td><td style="width:40%">${bar(x.rating)}</td><td><b>${x.rating}</b> <span class="small muted">${x.rating - R.elo >= 0 ? "+" : ""}${x.rating - R.elo} vs Elo · ${x.n} pos.</span></td><td><button class="btn secondary small" data-prac="${C.esc(c)}">Train</button></td></tr>`).join("")}</table></div>` : ""}
+    ${rows.length ? `<div class="card"><h2>Per category (weakest first)</h2><table>${rows.map(([c, x]) => `<tr><td>${C.esc(catLabel(c))}</td><td style="width:40%">${bar(x.rating)}</td><td>${x.n < 3 ? `<span class="muted">≈${Math.round(x.rating / 50) * 50}</span> <span class="small muted">only ${x.n} position${x.n === 1 ? "" : "s"}: a rough guess (±300)</span>` : `<b>${x.rating}</b> <span class="small muted">${x.rating - R.elo >= 0 ? "+" : ""}${x.rating - R.elo} vs Elo · ${x.n} positions</span>`}</td><td><button class="btn secondary small" data-prac="${C.esc(c)}">Train</button></td></tr>`).join("")}</table></div>` : ""}
     ${R.style ? `<div class="card"><h2>Your style choices (${R.style.n} style positions)</h2><p class="small muted">Positions with several good moves of a different kind: which kind did you choose?</p>
       ${["attack", "solid", "positional", "trade"].map((k) => `<div style="display:grid;grid-template-columns:150px 1fr 42px;gap:8px;align-items:center;margin:6px 0"><b class="small">${STYLES[k].label}</b><div class="bar" style="height:10px"><div style="width:${R.style[k]}%"></div></div><span>${R.style[k]}%</span></div>`).join("")}
       <p class="small">${R.style.theory !== null ? `In opening positions you chose the <b>book move ${R.style.theory}%</b> of the time. ` : ""}${R.style.sound}% of your choices were sound (one of the good moves).
-      ${(() => { const top = ["attack", "solid", "positional", "trade"].sort((x, y) => R.style[y] - R.style[x])[0]; return R.style[top] >= 40 ? `You clearly prefer <b>${STYLES[top].label.toLowerCase()}</b> moves.` : "Your choices are mixed: no single kind dominates."; })()}</p></div>` : ""}
+      ${(() => { const srt = ["attack", "solid", "positional", "trade"].sort((x, y) => R.style[y] - R.style[x]), top = srt[0]; return R.style[top] >= 40 && R.style[top] - R.style[srt[1]] >= 15 ? `You clearly prefer <b>${STYLES[top].label.toLowerCase()}</b> moves.` : "Your choices are mixed: no single kind dominates."; })()}</p></div>` : ""}
     ${R.deep ? `<div class="card"><h2>Deep calculation (${R.deep.n} lines)</h2><p class="small">In lines where every move is the only move, you saw on average <b>${R.deep.avg} of ${R.deep.avgTotal}</b> half-moves (your moves and your opponent's only replies). Furthest: ${R.deep.best} half-moves. Whole line seen: ${R.deep.full} of ${R.deep.n}.</p></div>` : ""}
     ${rated ? `<div class="card"><h2>How do you think?</h2><ul class="small">
       ${R.depth ? `<li><b>Calculation depth:</b> on positions with 2+ moves, you saw on average <b>${R.depth.avg} of ${R.depth.avgNeeded}</b> of your moves <b>from the start</b>, and <b>${R.depth.avgHelp}</b> once the first moves had been played for you. ${R.depth.full}/${R.depth.n} completely right from the start. ${R.depth.avgHelp - R.depth.avg >= 0.7 ? "Big gap between 'from the start' and 'with help': you do find the moves, but you don't see them far enough ahead. Train by calculating long puzzles without moving the pieces, and write down the whole line." : R.depth.avg / R.depth.avgNeeded < 0.6 ? "You often stop calculating too early: keep going until the position is quiet (no more checks or captures)." : "You calculate lines through well."}</li>` : ""}
@@ -632,7 +642,13 @@ export function profileView(v, C) {
     ${R ? `<div class="card"><h2>Player type (Lars Bo Hansen model)</h2><p class="small muted">Everyone has something of all four types; one usually dominates. Based on your test categories, the questionnaire${S ? " and your games" : ""}.</p>
       ${Object.entries(R.types).sort((a, b) => b[1] - a[1]).map(([k, x]) => `<div style="display:grid;grid-template-columns:105px 1fr 42px;gap:8px;align-items:center;margin:6px 0"><b>${PLAYER_TYPES[k].name}</b><div class="bar" style="height:10px"><div style="width:${x}%"></div></div><span>${x}%</span></div>`).join("")}</div>` : ""}
     <div class="card"><h2>You as ${C.esc(T.name.toLowerCase())}</h2><p>${C.esc(T.traits)} <span class="small muted">(Like ${C.esc(T.examples)}.)</span></p>
-      <h3>Strengths</h3><ul class="small">${T.strengths.map((x) => `<li>${C.esc(x)}</li>`).join("")}</ul>
+      <h3>Typical strengths of this type</h3><ul class="small">${T.strengths.map((x) => `<li>${C.esc(x)}</li>`).join("")}</ul>
+      ${(() => { // check the type's claims against the games and the test
+        const warn = [];
+        const mv = A ? Object.values(A.phaseMoves || {}).reduce((a, b) => a + b, 0) : 0, b100 = mv ? +(100 * ((A.errorCounts || {}).blunder || 0) / mv).toFixed(1) : 0;
+        if (b100 >= 3) warn.push(`your games show many blunders (${b100} per 100 moves), so "few gross blunders" doesn't apply to you yet`);
+        if (R?.depth && R.depth.avg < R.depth.avgNeeded * 0.6) warn.push(`in the test you saw ${R.depth.avg} of ${R.depth.avgNeeded} moves of the long lines on average, so calculation depth is a point to work on`);
+        return warn.length ? `<p class="small feedback warn">Where your numbers differ: ${C.esc(warn.join("; "))}. The type describes how you like to play, not how well.</p>` : ""; })()}
       <h3>Typical pitfalls</h3><ul class="small">${T.weaknesses.map((x) => `<li>${C.esc(x)}</li>`).join("")}</ul>
       <h3>Work points</h3><ul class="small">${T.work.map((x) => `<li>${C.esc(x)}</li>`).join("")}</ul>
       <div class="row">${[...new Set(T.modules.concat(weakCats))].map((c) => `<button class="btn secondary small" data-prac="${C.esc(c)}">Train: ${C.esc(catLabel(c))}</button>`).join("")}</div></div>
@@ -641,7 +657,7 @@ export function profileView(v, C) {
       <tr><td>Sacrifices (≥2 points, not won straight back)</td><td>${S.sacSound} sound, ${S.sacUnsound} unsound (${S.sacPer10} per 10 games)</td></tr>
       <tr><td>Opposite-side castling</td><td>${S.oppCastlePct}% of games${S.stormPerGame ? `, ${S.stormPerGame} pawn-storm moves per game` : ""}</td></tr>
       <tr><td>Queens traded before move 20</td><td>${S.earlyQueenTradePct}% of games</td></tr>
-      <tr><td><b>Accuracy when you're ahead / equal / behind</b></td><td><b>${S.acc.ahead ?? "–"} / ${S.acc.equal ?? "–"} / ${S.acc.behind ?? "–"}</b></td></tr></table>
+      <tr><td><b>Move accuracy when you're ahead / equal / behind</b><div class="muted">average per move, so higher than the game accuracy (${A?.cpl?.all?.me?.acc ?? "–"}) on the Report</div></td><td><b>${S.acc.ahead ?? "–"} / ${S.acc.equal ?? "–"} / ${S.acc.behind ?? "–"}</b></td></tr></table>
       <p class="small">${styleComment(S)}</p></div>` : (A ? `<div class="card"><p class="small">Analyse new games (or re-analyse them) for style statistics.</p></div>` : "")}
     <div class="card"><h2>Openings</h2>
       ${rep ? `<h3>What you play now</h3><table class="small">${rep.map((r) => `<tr><td>${C.esc(r.label)}</td><td>${C.esc(r.name)}</td><td>${r.games} games, ${r.scorePct}%</td></tr>`).join("")}</table>` : ""}

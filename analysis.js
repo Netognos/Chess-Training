@@ -470,10 +470,27 @@ export function punishText(fen, pv) {
 
 // One plain sentence about a mistake, for beginners: what your move allowed, counted in piece values
 const VALS = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+// what you could have done instead, in plain words (a mate in one, or a piece you could take for free)
+function plainMissed(e) {
+  try {
+    const b = new Chess(e.fen); const all = b.moves({ verbose: true });
+    const mate = all.find((x) => { const q = new Chess(e.fen); q.move(x); return q.isCheckmate(); });
+    if (mate && mate.san !== e.played) return `You had checkmate in one move: ${mate.san}! Before every move, look at all your checks first.`;
+    const caps = all.filter((x) => x.captured).map((x) => { const t = new Chess(e.fen); t.move(x); const back = t.moves({ verbose: true }).some((y) => y.to === x.to && y.captured);
+      return { x, gain: VALS[x.captured] - (back ? VALS[x.piece] : 0) }; }).sort((a, b) => b.gain - a.gain);
+    const t = caps[0];
+    if (t && t.gain >= 2 && t.x.san !== e.played) return `You could have taken the ${PIECE_NAME[t.x.captured]} on ${t.x.to} with ${t.x.san}${t.gain >= VALS[t.x.captured] ? ": it wasn't protected, so it was free" : ""} (+${t.gain}). Before every move, look at what you can take.`;
+  } catch {}
+  return "";
+}
+// is there a concrete reason a beginner can see (a piece lost, a mate allowed or missed)?
+export function plainConcrete(e) { const t = plainMistake(e); return !!t && !/wasn't the best move/.test(t); }
 export function plainMistake(e) {
   try {
     const c = new Chess(e.fen); const m = c.move(e.played); const me = m.color;
     if (c.isCheckmate()) return "";
+    const missed = plainMissed(e);
+    if (/^You had checkmate/.test(missed)) return missed;
     // the best capture for your opponent now: a piece that is undefended, or worth more than what takes it
     const caps = c.moves({ verbose: true }).filter((x) => x.captured).map((x) => { const t = new Chess(c.fen()); t.move(x); const back = t.moves({ verbose: true }).some((y) => y.to === x.to && y.captured);
       return { x, gain: VALS[x.captured] - (back ? VALS[x.piece] : 0) }; }).sort((a, b) => b.gain - a.gain);
@@ -484,6 +501,7 @@ export function plainMistake(e) {
       const lost = PIECE_NAME[t.x.captured], gotBack = m.captured ? ` You took a ${PIECE_NAME[m.captured]} (${VALS[m.captured]})` : "";
       return `After ${m.san}, your opponent can take your ${lost} on ${t.x.to} with ${t.x.san} (${t.x.to === m.to ? "the square you just moved to is protected" : "it isn't protected"}).${gotBack ? `${gotBack}, but lose a ${lost} (${VALS[t.x.captured]}).` : ` That's ${VALS[t.x.captured]} point${VALS[t.x.captured] === 1 ? "" : "s"} for free.`} Ask before every move: can they take something of mine after this?`;
     }
+    if (missed) return missed;
     return `${m.san} wasn't the best move: Stockfish preferred ${e.best || "another move"}. Your move didn't lose a piece right away, but it gave your opponent a better position.`;
   } catch { return ""; }
 }

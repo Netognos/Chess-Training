@@ -108,13 +108,13 @@ function detail(v, o, C) {
   v.querySelector("#first").onclick = () => { i = 0; draw(); };
   v.querySelector("#prev").onclick = () => { i = Math.max(0, i - 1); draw(); };
   v.querySelector("#next").onclick = () => { i = Math.min(pos.length - 1, i + 1); draw(); };
-  v.querySelector("#toBoard").onclick = () => C.go("board", { fen: pos[i].fen });
+  v.querySelector("#toBoard").onclick = () => C.go("board", { fen: pos[i].fen, orient: o.side === "w" ? "w" : "b" });
   ex = mountExplorer(v.querySelector("#ex"), { getFen: () => pos[i].fen, p, esc: C.esc, go: C.go,
     onMove: (uci) => {
       const nx = pos[i + 1];
       if (nx && nx.last && nx.last[0] + nx.last[1] === uci.slice(0, 4)) { i++; draw(); return; }
       const c = new Chess(pos[i].fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-      C.go("board", { fen: c.fen(), book: true });
+      C.go("board", { fen: c.fen(), book: true, orient: o.side === "w" ? "w" : "b" });
     } });
   v.querySelector("#back").onclick = () => C.go("openings");
   const ar = v.querySelector("#addRep");

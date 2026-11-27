@@ -6,7 +6,7 @@ import { lineToCp, winPct } from "./engine.js";
 const posAt = (root, moves, n) => { const c = new Chess(root); for (const m of moves.slice(0, n)) c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] }); return c; };
 
 export const LB_HELP = `<b>How to enter moves</b><ul>
-  <li><b>Drag or tap</b> a piece to its square. The pieces stay where they are on the board (you calculate it in your head), but each move counts: after 1.e4 you continue with the pawn from e4.</li>
+  <li><b>Drag or tap</b> a piece to its square; each move is written down as a line. With <b>Move the pieces on the board</b> ticked, the pieces move as you go. Without it they stay where they are (you calculate it in your head), but each move still counts: after 1.e4 you continue with the pawn from e4.</li>
   <li>Every move is written down as a <b>line</b> under the board. Your opponent's replies go in the same line.</li>
   <li>A move for the side that isn't to move starts a <b>new line</b>: another idea, or another defence you looked at.</li>
   <li><b>★</b> = your main line. On other lines, <b>✓</b> = "I think this works", <b>✗</b> = "I looked at it, it doesn't work". Stockfish checks whether you were right.</li>
@@ -216,7 +216,7 @@ export async function sideReport({ gradeMove, eng, root, main, sides, ms = 400 }
     if (!c.isGameOver()) {
       const rs = await eng.analyse(c.fen(), { movetime: 700, multipv: 3 });
       const bestW = winPct(lineToCp(rs[0]));
-      const serious = rs.filter((l) => l.pv[0] && bestW - winPct(lineToCp(l)) < 10).map((l) => { const t = new Chess(c.fen()); return t.move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san; });
+      const serious = rs.filter((l) => l.pv[0] && bestW - winPct(lineToCp(l)) < 10).map((l) => { const t = new Chess(c.fen()); return t.move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san; }).filter((s) => !s.endsWith("#"));
       if (serious.length > 1) {
         const allLines = [main, ...sides.map((s) => s.moves)];
         coverage = serious.map((san) => ({ san, covered: allLines.some((l) => l[0]?.uci === main[0].uci && l[1]?.san === san) }));
@@ -227,7 +227,12 @@ export async function sideReport({ gradeMove, eng, root, main, sides, ms = 400 }
 }
 export function sideReportHtml(rep, esc, root, main) {
   if (!rep || (!rep.items.length && !rep.coverage)) return "";
-  const cov = rep.coverage ? `<p class="small" style="margin:4px 0">Serious defences after ${esc(main[0].san)}: ${rep.coverage.map((d) => d.covered ? `<b>${esc(d.san)} ✓</b>` : `${esc(d.san)} <span class="muted">(not in your lines)</span>`).join(" · ")}</p>` : "";
+  if (!rep.items.length && rep.coverage) {
+    // no extra lines entered: just a tip, not a fault
+    const miss = rep.coverage.filter((d) => !d.covered);
+    return miss.length ? `<p class="small muted" style="margin-top:8px">Optional: after ${esc(main[0].san)} your opponent could also try ${miss.map((d) => esc(d.san)).join(" or ")}. Adding a line for those (play a move for the other side on the board) earns a small bonus.</p>` : "";
+  }
+  const cov = rep.coverage ? `<p class="small" style="margin:4px 0">Serious defences after ${esc(main[0].san)}: ${rep.coverage.map((d) => d.covered ? `<b>${esc(d.san)} ✓</b>` : `${esc(d.san)} <span class="muted">(no line for it yet)</span>`).join(" · ")}</p>` : "";
   return `<div class="card" style="margin-top:10px"><h3 style="margin-top:0">Your other lines</h3>${cov}
     ${rep.items.map((it) => `<div class="feedback ${it.cls}" style="margin-top:6px"><b>Line ${it.line}: ${esc(it.title)}</b> → ${esc(it.verdict)}<br><span class="small muted">${esc(it.text)}</span><br><span class="small">${esc(it.notes.join(" · "))}</span></div>`).join("")}</div>`;
 }

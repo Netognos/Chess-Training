@@ -28,7 +28,7 @@ export const ENDGAMES = [
     question: { prompt: "Same position, but Black to move. What is the result?", options: ["White wins", "Draw"], answer: "White wins" },
     idea: "Black has to give way, so White's king reaches a key square in front of the pawn. Win it as White.",
     opp: "Black keeps the opposition whenever you allow it.", hint: "Your king goes first, the pawn follows." },
-  { id: "outside-passer", r: 1500, level: "Pawn endgames", theme: "Outside passed pawn", fen: "8/5k2/8/p4p2/5P2/1P2K3/8/8 w - - 0 1", side: "w", goal: "win",
+  { id: "outside-passer", r: 1500, level: "Pawn endgames", theme: "Active king: win the a-pawn", fen: "8/5k2/8/p4p2/5P2/1P2K3/8/8 w - - 0 1", side: "w", goal: "win",
     idea: "The black king must watch the kingside, so your king goes to the queenside (Kd4–c4–b5) and wins the a5 pawn. Then your b-pawn decides. The king is a fighting piece: use it.",
     opp: "Black's king tries to keep up with yours or to win your f4 pawn.", hint: "The game is decided on the queenside: which piece goes there?" },
   { id: "wrong-bishop", r: 1500, level: "Minor pieces", theme: "Wrong bishop + rook pawn (fortress)", fen: "7k/8/6KP/8/8/8/8/5B2 b - - 0 1", side: "b", goal: "draw",
@@ -225,7 +225,7 @@ export const STYLE_OPENINGS = {
   pragmatist: {
     white: [["1.e4 with main lines (Ruy Lopez, Open Sicilian)", "Concrete positions where good calculation pays off."], ["Flexible move orders that avoid your opponent's preparation", "Practical choices: get your opponent out of their theory."]],
     black: [["Sicilian (Najdorf/Taimanov) or 1...e5 main lines", "Concrete fights where you calculate better than your opponent."], ["Grünfeld / Queen's Gambit Declined", "Concrete centre play; a good answer to 1.d4."]],
-    hard: "Quiet, closed positions without concrete play (closed Catalan, London set-ups) make you drift. Learn 2-3 standard plans for those structures.",
+    hard: "Quiet, closed positions without concrete play (closed Catalan, slow Colle or Stonewall set-ups by your opponent) make you drift. Learn 2-3 standard plans for those structures.",
   },
   theoretician: {
     white: [["1.d4 + Queen's Gambit main lines", "Known structures (Carlsbad, IQP) with clear plans."], ["London / Exchange Slav (as a low-theory option)", "Systematic and structure-driven."]],

@@ -47,10 +47,11 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
   const newly = newAll.filter((p) => c1.attackers(p.square, me).includes(m.to));
   const disc = newAll.filter((p) => !c1.attackers(p.square, me).includes(m.to) && p.type !== "k");
   if (disc.length) { const by = c1.attackers(disc[0].square, me)[0]; facts.push(`${m.san} opens a line: your ${NAME[c1.get(by)?.type] || "piece"} on ${by} now attacks the ${NAME[disc[0].type]} on ${disc[0].square} (a discovered attack).`); concepts.add("double"); }
-  if (m.san.includes("#")) { facts.push(`${m.san} is checkmate.`); concepts.add("check"); }
+  if (m.san.includes("#")) { const ks = pieces(c1, opp).find((p) => p.type === "k")?.square; facts.push(`${m.san} is checkmate: the king${ks ? ` on ${ks}` : ""} is in check, it can't take the checking piece or block it, and every square around it is covered or taken by its own pieces.`); concepts.add("check"); }
   else if (m.san.includes("+")) { facts.push(`${m.san} gives check.`); concepts.add("check"); }
-  if (newly.length >= 2 && !m.san.includes("#")) { facts.push(`${m.san} attacks ${newly.length === 2 ? "two" : newly.length} pieces at once: the ${newly.map((p) => `${NAME[p.type]} on ${p.square}`).join(" and the ")} (a double attack).`); concepts.add("double"); if (newly.some((p) => p.type === "q")) concepts.add("queenAway"); }
-  else if (newly.length === 1) { facts.push(`${m.san} attacks the ${NAME[newly[0].type]} on ${newly[0].square}.`); if (newly[0].type === "q") concepts.add("queenAway"); }
+  const takesBack = newly.some((p) => p.type !== "k" && c1.moves({ verbose: true }).some((x) => x.from === p.square && x.to === m.to)) || (m.san.includes("+") && c1.moves({ verbose: true }).some((x) => x.to === m.to && x.captured));
+  if (newly.length >= 2 && !m.san.includes("#") && !takesBack) { facts.push(`${m.san} attacks ${newly.length === 2 ? "two" : newly.length} pieces at once: the ${newly.map((p) => `${NAME[p.type]} on ${p.square}`).join(" and the ")} (a double attack).`); concepts.add("double"); if (newly.some((p) => p.type === "q")) concepts.add("queenAway"); }
+  else if (newly.length >= 1 && !(m.san.includes("#") && newly[0].type === "k")) { if (newly.length >= 2) { facts.push(`${m.san} attacks the ${newly.map((p) => `${NAME[p.type]} on ${p.square}`).join(" and the ")}, but it can be taken, so this is an offer to trade rather than a fork.`); } else { facts.push(`${m.san} attacks the ${NAME[newly[0].type]} on ${newly[0].square}.`); if (newly[0].type === "q") concepts.add("queenAway"); } }
   if (m.piece === "p" && !m.captured && newly.length) concepts.add("space");
   if (m.captured) {
     // does the line really win material? count it after the engine's main line (6 half-moves)
@@ -79,7 +80,7 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
         desc += `: the ${NAME[reply.piece]} has to retreat${mob1 !== null && mob2 !== null && mob2 < mob1 ? ` (from ${mob1} to ${mob2} available moves, so it gets more passive)` : ""}`;
         concepts.add("retreat");
       } else if (reply.captured) desc += ` (capturing a ${NAME[reply.captured]})`;
-      facts.push(`${desc}. Main line: ${line}.`);
+      facts.push(`${desc}. Likely continuation: ${m.san} ${line}.`);
       // your follow-up in the main line
       if (r.pv[1]) {
         const c3 = new Chess(c2.fen()); const f = uciMove(c3, r.pv[1]);
@@ -87,7 +88,7 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
           keyMoves.add(f.san.replace(/[+#]/g, ""));
           // "defends" only a piece that is actually attacked and wasn't defended before
           const defended = pieces(c3, me).filter((p) => p.type !== "k" && p.square !== f.to && c3.attackers(p.square, me).includes(f.to) && !c2.attackers(p.square, me).length && c3.attackers(p.square, opp).length);
-          if (defended.length) facts.push(`Then ${f.san} defends your ${NAME[defended[0].type]} on ${defended[0].square}, which was attacked.`);
+          if (defended.length && !(f.piece === "k" && c2.inCheck())) facts.push(`Then ${f.san} defends your ${NAME[defended[0].type]} on ${defended[0].square}, which was attacked.`);
           else facts.push(`Your follow-up in that line is ${f.san}.`);
         }
       }
@@ -136,7 +137,9 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
     }
   }
   // 5. alternatives
-  const alts = top.filter((l, i, all) => l.pv[0] && l.pv[0] !== best && all.findIndex((o) => o.pv[0] === l.pv[0]) === i).map((l) => ({ san: new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san, cp: lineToCp(l) }));
+  const alts = top.filter((l, i, all) => l.pv[0] && l.pv[0] !== best && all.findIndex((o) => o.pv[0] === l.pv[0]) === i).map((l) => ({ san: new Chess(fen).move({ from: l.pv[0].slice(0, 2), to: l.pv[0].slice(2, 4), promotion: l.pv[0][4] }).san, cp: lineToCp(l) }))
+    // an alternative rated higher than the solution only confuses (short thinking time); keep the weaker ones
+    .filter((a) => a.cp <= bestCp + 30);
 
   // 6. compare with what the player wrote
   const text = (userText + " " + userLine).toLowerCase();
@@ -144,7 +147,10 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
   const PN = { q: ["dame", "queen"], n: ["paard", "knight"], r: ["toren", "rook"], b: ["loper", "bishop"], k: ["koning", "king"] };
   if (newly.length >= 2 && newly.filter((p) => (PN[p.type] || []).some((w) => text.includes(w))).length >= 2 && /(valt|aanval|attack|bedreig|threat)/.test(text)) said.add("double");
   const mentioned = [...new Set(((userText + " " + userLine).match(/\b(O-O(-O)?|0-0(-0)?|[KQRBNDTLP]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBNDTLP])?)/g) || []).map((t) => t.replace(/^D/, "Q").replace(/^T/, "R").replace(/^L/, "B").replace(/^P/, "N").replace(/^0-0-0/, "O-O-O").replace(/^0-0/, "O-O")))];
-  const hitMoves = mentioned.filter((t) => keyMoves.has(t));
+  const hitMoves0 = mentioned.filter((t) => keyMoves.has(t));
+  // a bare square ("c3") is usually a square, not a move: only keep it when it is a move of the line
+  mentioned.splice(0, mentioned.length, ...mentioned.filter((t) => !/^[a-h][1-8]$/.test(t) || keyMoves.has(t)));
+  const hitMoves = hitMoves0;
   const conceptCheck = [...concepts].map((k) => ({ k, label: CONCEPTS[k].label, hit: said.has(k) }));
   return { san: m.san, bestCp, facts, tempting, alts, conceptCheck, hitMoves, mentioned, keyMoves: [...keyMoves] };
 }
@@ -158,5 +164,5 @@ export function explainHtml(x, esc) {
     <h3>Your thoughts compared</h3>
     ${x.conceptCheck.length ? `<ul class="small">${ok.map((c) => `<li>✓ You saw: <b>${esc(c.label)}</b></li>`).join("")}${miss.map((c) => `<li>✗ Not in your notes: <b>${esc(c.label)}</b></li>`).join("")}</ul>` : ""}
     ${x.mentioned.length ? `<p class="small">Moves in your notes: ${x.mentioned.map((t) => (x.hitMoves.includes(t) ? `<b>${esc(t)} ✓</b>` : esc(t))).join(", ")}${x.hitMoves.length ? " (✓ = also in the engine's main line)." : "."}</p>` : ""}
-    <p class="small muted">Rough check on keywords and moves, not a real reading of your text. For real feedback: Results → "Copy for Claude".</p></div>`;
+    <p class="small muted">Rough check on keywords and moves, not a real reading of your text. For real feedback: finish the test, then Test → Results → "Copy for Claude".</p></div>`;
 }

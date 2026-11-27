@@ -42,18 +42,26 @@ export function diagnose(A, player = {}) {
     for (const x of cells.slice(0, 2)) {
       const net = F?.contrib?.[x.ph]?.avg;
       const e = x.ex[0];
-      const ctx = net != null && net >= 0 ? ` Even though you come out ahead in the ${x.ph} overall (${net >= 0 ? "+" : ""}${net}), these errors cost you points you could have kept.` : "";
+      const ctx = net != null && net >= 0 ? ` Even though you come out ahead in the ${x.ph} overall (${net >= 0 ? "+" : ""}${net}), these errors cost you points you could have kept: your opponents' mistakes in the same phase win most of it back.` : net != null && net > -x.perGame ? ` On balance the ${x.ph} costs you ${net} per game, because your opponents also make mistakes.` : "";
       weaknesses.push({ key: `err-${x.ph}-${x.c}`, area: x.c === "tactical" ? "Tactics" : x.c === "technique" ? "Endgames" : x.c === "positional" ? (x.ph === "opening" ? "Openings" : "Middlegame") : "General (calculation, own games, thinking)",
         title: `${CAUSE[x.c]} in the ${x.ph}`,
         evidence: `${x.n} mistakes and blunders (${x.blunders} blunders), costing ${x.perGame} points of win chance per game.${ctx}${e ? ` Biggest: move ${e.moveNo} ${e.played}${e.best ? ` instead of ${e.best}` : ""} (−${Math.round(e.drop)}%).` : ""}`,
         drills: (TAG_ADVICE[{ time: "time trouble", tactical: "missed tactic / forcing move", technique: "endgame technique", positional: "positional / planning" }[x.c]] || {}).drills });
     }
   }
-  const totalSerious = Object.values(A.tags || {}).reduce((a, b) => a + b, 0) || 1;
-  Object.entries(A.tags || {}).filter(([t, n]) => n >= 2 && TAG_ADVICE[t] && !weaknesses.some((w) => w.key.startsWith("err-") && w.key.endsWith("-" + errorCause({ tags: [t], phase: t === "endgame technique" ? "endgame" : "" })))).slice(0, 2).forEach(([t, n]) => {
-    const adv = TAG_ADVICE[t];
-    weaknesses.push({ key: "tag-" + t, area: adv.area, title: cap(t), evidence: `${n} of your serious errors (${Math.round(100 * n / totalSerious)}%). ${adv.why}`, drills: adv.drills, links: adv.links });
-  });
+  // Remaining causes (not already listed per phase), counted exactly like the "What went wrong" table:
+  // one cause per error, out of all mistakes and blunders.
+  if (M && A.games >= 3) {
+    const TAGOF = { time: "time trouble", tactical: "missed tactic / forcing move", technique: "endgame technique", positional: "positional / planning" };
+    const all = Object.values(M).flatMap((cs) => Object.values(cs)); const totErr = all.reduce((a, x) => a + x.n, 0) || 1;
+    const byC = {}; for (const cs of Object.values(M)) for (const [c, x] of Object.entries(cs)) byC[c] = (byC[c] || 0) + x.n;
+    const egPlus = (F?.contrib?.endgame?.avg ?? -1) > 0;
+    Object.entries(byC).filter(([c, n]) => n >= 3 && n / totErr >= 0.1 && TAG_ADVICE[TAGOF[c]] && !(c === "technique" && egPlus) && !weaknesses.some((w) => w.key.startsWith("err-") && w.key.endsWith("-" + c)))
+      .sort((a, b) => b[1] - a[1]).slice(0, 2).forEach(([c, n]) => {
+        const adv = TAG_ADVICE[TAGOF[c]];
+        weaknesses.push({ key: "tag-" + TAGOF[c], area: adv.area, title: cap(TAGOF[c]), evidence: `${n} of your ${totErr} mistakes and blunders (${Math.round(100 * n / totErr)}%). ${adv.why}`, drills: adv.drills, links: adv.links });
+      });
+  }
   if (A.lostOnTime >= 2 && !weaknesses.some((w) => w.key === "tag-time trouble"))
     weaknesses.push({ key: "tag-time trouble", area: TAG_ADVICE["time trouble"].area, title: "Losing on time", evidence: `${A.lostOnTime} games lost on time.`, drills: TAG_ADVICE["time trouble"].drills, links: [] });
   const c = A.conversion || {}, r = A.resilience || {};
@@ -83,7 +91,7 @@ export function diagnose(A, player = {}) {
     const weak = bc.w.scorePct < bc.b.scorePct ? "Black" : "White";
     const other = weak === "White" ? "b" : "w";
     weaknesses.push({ key: "color", area: "Openings", title: `Results with ${weak === "White" ? "the white" : "the black"} pieces`,
-      evidence: `You score ${weak === "White" ? bc.w.scorePct : bc.b.scorePct}% as ${weak}, against ${bc[other].scorePct}% with the other colour.` });
+      evidence: `You score ${weak === "White" ? bc.w.scorePct : bc.b.scorePct}% as ${weak}, against ${bc[other].scorePct}% as ${weak === "White" ? "Black" : "White"}.${(() => { const wc = weak === "White" ? "w" : "b"; const o = (A.families || A.openings || []).filter((x) => x.color === wc && x.games >= 2 && !/no name/.test(x.name)).sort((a, b) => b.games - a.games)[0]; return o ? ` Your most played opening as ${weak}: ${o.name} (${o.games} games, ${o.scorePct}%). See Openings for where it goes wrong.` : ""; })()}` });
   }
   if (!strengths.length) strengths.push({ title: "Not enough data yet", evidence: "Analyse at least 15-20 games for a reliable picture." });
   return { strengths, weaknesses: weaknesses.slice(0, 6), plan: makePlan(weaknesses, player.hours || 4) };
