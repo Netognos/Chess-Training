@@ -24,7 +24,7 @@ const CONCEPTS = {
   space: { label: "gaining space / tempo", kw: ["ruimte", "space", "tempo", "initiatief", "initiative", "opdringen", "push"] },
   development: { label: "developing a piece", kw: ["ontwikkel", "develop", "loper eruit", "activ"] },
   check: { label: "check", kw: ["schaak", "check"] },
-  material: { label: "winning material", kw: ["win", "wint", "materiaal", "material", "stuk winnen", "piece up"] },
+  material: { label: "winning material", kw: ["win", "wint", "materiaal", "material", "stuk winnen", "piece up", "free", "take", "takes", "grab", "capture", "hanging", "undefended", "loose", "gratis", "pak", "slaan"] },
   mate: { label: "mating attack", kw: ["mat", "mate", "checkmate"] },
   trade: { label: "trading pieces", kw: ["ruil", "trade", "exchange", "afruilen"] },
 };
@@ -111,7 +111,11 @@ export async function explainMove(eng, fen, bestUci, userText = "", userLine = "
     if (!caps.length) continue;
     const [b0] = await eng.analyse(base.fen(), { movetime: 500 });
     const bcp = lineToCp(b0);
+    // the solution's own continuation is never "tempting but fails"; mates (+73 style evals) neither
+    const solNext = rp.san === reply?.san ? (top.find((l) => l.pv[0] === best) || top[0])?.pv?.[2] : null;
     for (const cap of caps) {
+      if (b0?.pv?.[0] === cap.from + cap.to || solNext === cap.from + cap.to) continue;
+      if (Math.abs(bcp) >= 5000) continue;
       const t = new Chess(base.fen()); t.move(cap.san);
       if (t.isCheckmate()) continue;
       const [rr] = await eng.analyse(t.fen(), { movetime: 500 });

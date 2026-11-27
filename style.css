@@ -387,7 +387,8 @@ main#view, #view { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 .pmore { margin-top: 10px; } .pmore summary { font-size: 13.5px; cursor: pointer; color: var(--felt); font-weight: 600; }
 #pfb:not(:empty) { margin-top: 8px; max-width: 480px; }
 /* the coordinate number stays readable above pieces */
-.board .coord { z-index: 2; text-shadow: 0 0 2px var(--light), 0 0 2px var(--light); }
+.board .coord { z-index: 2; }
+@media (max-width: 640px) { .board .coord { font-size: 11px; opacity: .95; } }
 .board .mark.star { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: clamp(18px, 6vw, 34px); color: #e3a21a; text-shadow: 0 1px 2px rgba(0,0,0,.35); pointer-events: none; z-index: 2; }
 .board .mark.hl { position: absolute; inset: 0; box-shadow: inset 0 0 0 3px #e3a21a; pointer-events: none; }
 .lessons { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
@@ -406,3 +407,9 @@ main#view, #view { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 .evgraph .evl { fill: none; stroke: var(--felt); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 .evgraph circle.blunder { fill: var(--bad); } .evgraph circle.mistake { fill: #b5651d; }
 .evgraph .curline line { stroke: #e3a21a; stroke-width: 2; vector-effect: non-scaling-stroke; }
+
+#jobBar.ongames { display: none; }
+.plegend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; color: var(--muted); }
+.plegend span { display: inline-flex; align-items: center; gap: 4px; }
+.promo button { display: inline-flex; flex-direction: column; align-items: center; }
+.promo .plab { font-size: 10px; color: var(--ink); }

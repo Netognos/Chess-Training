@@ -171,7 +171,7 @@ export function patterns(key, D) {
   if (key === "tactical") {
     const missed = E.filter((e) => /[x+#]/.test(e.best || "")).length, allowed = E.filter((e) => (e.tags || []).some((t) => /hung|allowed/.test(t))).length;
     out.push(`In ${missed} (${pct(missed, n)}%) the better move was itself a check or capture: a forcing move you didn't find. In ${allowed} (${pct(allowed, n)}%) your move left material or mate to your opponent.`);
-    const mate = E.filter((e) => (e.tags || []).some((t) => /mate/.test(t))).length; if (mate) out.push(`${mate} involved a mate (missed or allowed).`);
+    const mate = E.filter((e) => (e.tags || []).some((t) => /\bmate\b/.test(t))).length; if (mate) out.push(`${mate} involved a mate (missed or allowed).`);
   }
   if (key === "positional") {
     const pawn = E.filter((e) => pieceOf(e.played) === "P").length; if (pawn >= 2) out.push(`${pawn} (${pct(pawn, n)}%) were pawn moves. Pawn moves can't be taken back: they are the ones to check twice.`);

@@ -19,7 +19,8 @@ export function stripHtml(esc, title, stm) {
 // open the task automatically the first time a kind of position is shown
 export function bindStrip(v, board, kind, html) {
   const b = v.querySelector("#tInfo"); if (b) b.onclick = () => board.showInfo(html);
-  let seen = true; try { seen = localStorage.getItem("chesscoach.info." + kind) === "1"; localStorage.setItem("chesscoach.info." + kind, "1"); } catch {}
+  // opens by itself only the very first time (any kind); after that the ⓘ button is enough
+  let seen = true; try { seen = localStorage.getItem("chesscoach.info.any") === "1"; localStorage.setItem("chesscoach.info.any", "1"); } catch {}
   if (!seen) board.showInfo(html);
 }
 
@@ -120,7 +121,7 @@ export class LineBuilder {
         ${i === this.main ? "" : `<span class="lbv"><button class="lbok${l.verdict === "good" ? " on" : ""}" data-v="${i}:good" title="I think this works">✓</button><button class="lbbad${l.verdict === "bad" ? " on" : ""}" data-v="${i}:bad" title="I looked at this, but it doesn't work">✗</button></span>`}<button class="lbdel" data-del="${i}" title="Delete line">🗑</button></div>`;
     }).join("");
     this.el.innerHTML = `<div class="lb">
-      <div class="small muted lbhint">${this.lines.length ? "Green arrows = your moves, red = your opponent's. ★ main line · ✓/✗ other lines." : "Drag or tap your moves; the pieces stay put but each move counts."} <button class="linkbtn lbhelp" type="button">ⓘ How?</button></div>
+      <div class="small muted lbhint">${this.lines.length ? "Green arrows = your moves, red = your opponent's. ★ main line · ✓/✗ other lines." : (this.follow ? "Drag or tap your moves; each move is written down as a line." : "Drag or tap your moves; the pieces stay put but each move counts.")} <button class="linkbtn lbhelp" type="button">ⓘ How?</button></div>
       ${rows}
       ${this.msg ? `<div class="small" style="color:var(--bad)">${E(this.msg)}</div>` : ""}
       <div class="row small" style="margin-top:6px;gap:10px"><button class="btn secondary small" data-act="undo" ${this.hist.length ? "" : "disabled"}>↶ Undo move</button><button class="btn secondary small" data-act="new" ${this.line ? "" : "disabled"}>+ New line</button>

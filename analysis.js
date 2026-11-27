@@ -415,7 +415,7 @@ export function aggregate(games) {
     S.aggression = Math.max(0, Math.min(100, Math.round(10 + S.kingZonePct * 1.5 + S.checksPct * 1.5 + S.sacPer10 * 3 + S.oppCastlePct * 0.3 + S.stormPerGame * 4 - S.earlyQueenTradePct * 0.4)));
   }
   // openings faced: per colour, worst results (min 2 games)
-  A.hardest = A.openings.filter((o) => o.games >= 2).sort((a, b) => a.scorePct - b.scorePct || (a.wpAfter10 ?? 50) - (b.wpAfter10 ?? 50)).slice(0, 5);
+  A.hardest = A.openings.filter((o) => o.games >= 2 && o.scorePct < 50).sort((a, b) => a.scorePct - b.scorePct || (a.wpAfter10 ?? 50) - (b.wpAfter10 ?? 50)).slice(0, 5);
   return A;
 }
 
@@ -461,10 +461,30 @@ export function punishText(fen, pv) {
     if (m.captured && m.captured !== "p") return `your opponent plays ${m.san} and takes your ${PIECE_NAME[m.captured]}`;
     // a check or attack now that wins something on the next move
     if (pv[1] && pv[2]) { const m2 = c.move({ from: pv[1].slice(0, 2), to: pv[1].slice(2, 4), promotion: pv[1][4] }); const m3 = c.move({ from: pv[2].slice(0, 2), to: pv[2].slice(2, 4), promotion: pv[2][4] });
-      if (c.isCheckmate()) return `your opponent plays ${m.san}, and after ${m2.san} ${m3.san} it is checkmate`;
-      if (m3.captured && m3.captured !== "p") return `your opponent plays ${m.san}${m.san.includes("+") ? " (check)" : ""}, and after ${m2.san} wins your ${PIECE_NAME[m3.captured]} with ${m3.san}`; }
+      if (c.isCheckmate()) return `your opponent plays ${m.san}; after your reply ${m2.san}, ${m3.san} is checkmate`;
+      if (m3.captured && m3.captured !== "p") return `your opponent plays ${m.san}${m.san.includes("+") ? " (check)" : ""}; after your best reply ${m2.san}, ${m3.san} wins your ${PIECE_NAME[m3.captured]}`; }
     if (m.captured) return `your opponent plays ${m.san} and wins a pawn`;
     return `your opponent answers ${m.san}`;
+  } catch { return ""; }
+}
+
+// One plain sentence about a mistake, for beginners: what your move allowed, counted in piece values
+const VALS = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+export function plainMistake(e) {
+  try {
+    const c = new Chess(e.fen); const m = c.move(e.played); const me = m.color;
+    if (c.isCheckmate()) return "";
+    // the best capture for your opponent now: a piece that is undefended, or worth more than what takes it
+    const caps = c.moves({ verbose: true }).filter((x) => x.captured).map((x) => { const t = new Chess(c.fen()); t.move(x); const back = t.moves({ verbose: true }).some((y) => y.to === x.to && y.captured);
+      return { x, gain: VALS[x.captured] - (back ? VALS[x.piece] : 0) }; }).sort((a, b) => b.gain - a.gain);
+    const t = caps[0];
+    const mates = c.moves({ verbose: true }).find((x) => { const q = new Chess(c.fen()); q.move(x); return q.isCheckmate(); });
+    if (mates) return `After ${m.san}, your opponent can give checkmate with ${mates.san}. Before every move, look at all the checks your opponent will have.`;
+    if (t && t.gain - (m.captured ? VALS[m.captured] : 0) >= 2) {
+      const lost = PIECE_NAME[t.x.captured], gotBack = m.captured ? ` You took a ${PIECE_NAME[m.captured]} (${VALS[m.captured]})` : "";
+      return `After ${m.san}, your opponent can take your ${lost} on ${t.x.to} with ${t.x.san} (${t.x.to === m.to ? "the square you just moved to is protected" : "it isn't protected"}).${gotBack ? `${gotBack}, but lose a ${lost} (${VALS[t.x.captured]}).` : ` That's ${VALS[t.x.captured]} point${VALS[t.x.captured] === 1 ? "" : "s"} for free.`} Ask before every move: can they take something of mine after this?`;
+    }
+    return `${m.san} wasn't the best move: Stockfish preferred ${e.best || "another move"}. Your move didn't lose a piece right away, but it gave your opponent a better position.`;
   } catch { return ""; }
 }
 
@@ -526,7 +546,8 @@ export function cplStats(games) {
       const per = rows.filter((r) => r[0] >= 3).map((r) => r[1] / r[0]);
       const acpl = T[1] / T[0], h = half95(per);
       out[k][side] = { games: rows.length, moves: T[0], acpl: Math.round(acpl), lo: isFinite(h) ? Math.max(0, Math.round(acpl - h)) : null, hi: isFinite(h) ? Math.round(acpl + h) : null,
-        acc: +(T[2] / T[0]).toFixed(1), blunders: T[3], mistakes: T[4], inaccuracies: T[5], per100: +((100 * (T[3] + T[4])) / T[0]).toFixed(1) };
+        // whole game: the same game accuracy as the overview (Lichess formula); phases: average per move
+        acc: k === "all" ? (() => { const xs = gs.map((g) => (side === "me" ? g.accuracy : g.oppAccuracy)).filter((x) => x != null); return xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1) : +(T[2] / T[0]).toFixed(1); })() : +(T[2] / T[0]).toFixed(1), blunders: T[3], mistakes: T[4], inaccuracies: T[5], per100: +((100 * (T[3] + T[4])) / T[0]).toFixed(1) };
     }
   }
   return out;

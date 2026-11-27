@@ -3,7 +3,7 @@ import { Chess } from "./vendor/chess.js";
 import { PIECES } from "./pieces.js";
 
 const FILES = "abcdefgh";
-const IMG = Object.fromEntries(Object.entries(PIECES).map(([k, v]) => [k, "data:image/svg+xml;utf8," + encodeURIComponent(v)]));
+export const IMG = Object.fromEntries(Object.entries(PIECES).map(([k, v]) => [k, "data:image/svg+xml;utf8," + encodeURIComponent(v)]));
 
 export class Board {
   constructor(el, { orientation = "w", interactive = true, onMove = null } = {}) {
@@ -162,7 +162,9 @@ export class Board {
       this.promo.innerHTML = ""; this.promo.classList.remove("hidden");
       for (const p of ["q", "r", "b", "n"]) {
         const b = document.createElement("button"); const img = document.createElement("img");
-        img.src = IMG[color === "w" ? p.toUpperCase() : p]; b.appendChild(img);
+        img.src = IMG[color === "w" ? p.toUpperCase() : p]; img.alt = ""; b.appendChild(img);
+        const nm = { q: "Queen", r: "Rook", b: "Bishop", n: "Knight" }[p]; b.setAttribute("aria-label", nm); b.title = nm;
+        const lab = document.createElement("span"); lab.className = "plab"; lab.textContent = nm; b.appendChild(lab);
         b.onclick = () => { this.promo.classList.add("hidden"); res(p); };
         this.promo.appendChild(b);
       }

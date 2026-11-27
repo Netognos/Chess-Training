@@ -1,7 +1,7 @@
 import { Chess } from "./vendor/chess.js";
 import { Engine, lineToCp, winPct, fmtScore } from "./engine.js";
 import { Board } from "./board.js";
-import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES, gameTime, punishText } from "./analysis.js";
+import { splitPgn, analyseGame, aggregate, pvToSan, parseGame, gameKey, parseTcList, tcMatches, TC_CATS, fmtTc, ERR_CAUSES, gameTime, punishText, plainMistake } from "./analysis.js";
 import { diagnose, nextStepsFrom } from "./coach.js";
 import { ENDGAMES, REPERTOIRES, TAG_ADVICE } from "./data.js";
 import { readPosition } from "./reader.js";
@@ -206,12 +206,13 @@ function home(v) {
   const gsCard = nDone < stepsDef.length ? `<div class="card"><h2>Getting started</h2><p class="small muted">${nDone} of ${stepsDef.length} done</p><div class="progress">${stepsDef.map(([, d]) => `<span class="${d ? "done" : ""}"></span>`).join("")}</div>
       <div class="steps" style="margin-top:12px">${stepsDef.map(([l, d, t], i) => `<button class="step ${d ? "done" : ""}" data-go="${t}"><div class="n">${i + 1}</div>${l}</button>`).join("")}</div></div>` : "" || "";
   v.innerHTML = `<div class="hello"><div><div class="who">${new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"},</div><h1 style="margin:0;font-size:34px;font-weight:780">${esc(p.name)}</h1></div>
-      <div class="rating">${p.level === "new" && !nG ? `<b>Beginner</b>` : `<b>${playerElo(p)}</b>rating`}${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
+      <div class="rating">${p.level === "new" && !ratingInfo(p).games ? `<b>Beginner</b>` : (() => { const R = ratingInfo(p); return R.games || R.stated ? `<b>${R.used}</b>rating` : `<b>?</b>rating unknown`; })()}${st ? ` · ${esc(st.typeName)}` : ""}</div></div>
     ${nDone < 3 ? gsCard : ""}
-    <div class="card"><h2>Today</h2><div class="today">
+    <div class="card"><h2>Today <span class="muted small" style="font-weight:500">about ${Math.max(10, Math.round(((p.hours || 2) * 60) / 7 / 5) * 5)} minutes</span></h2>${(() => { if (!nG) return ""; const pg = periodGames(p); const top = Object.keys(THEMES).map((k) => ({ k, ...themeData(p, k, pg) })).sort((a, b) => b.lost - a.lost)[0];
+      return top && top.errs.length ? `<p class="small" style="margin:-4px 0 8px">Focus: <b>${esc(THEMES[top.k].title.toLowerCase())}</b>, your most costly kind of mistake. <a href="#" data-go="weak">Why?</a></p>` : ""; })()}<div class="today">
       ${p.level === "new" || (p.learn && Object.keys(p.learn).length && LESSONS.some((l) => !(p.learn || {})[l.id])) ? (() => { const d = LESSONS.filter((l) => (p.learn || {})[l.id]).length; const nx = LESSONS.find((l) => !(p.learn || {})[l.id]); return todo("train", nx ? "Learn the basics" : "Play the computer", nx ? `Lesson ${d + 1} of ${LESSONS.length}: ${esc(nx.title)}` : "All lessons done. Play a game at your level", null, nx ? "learn:" + nx.id : "learn:play", nx ? (d ? "Continue" : "Start") : "Play"); })() : ""}
-      ${todo("puzzle", "Puzzles from your games", duePz ? "Your own mistakes, repeated at spaced intervals" : nG ? "Nothing due. Come back tomorrow" : "Import games first: your mistakes become puzzles", duePz, nG ? "puzzles" : "games", duePz ? "Solve" : nG ? "Open" : "Import")}
-      ${todo("king", "Endgames to review", "Theory positions you play out against the engine", dueEg, "endgames", "Train")}
+      ${todo("puzzle", "Puzzles from your games", duePz ? `${Math.min(duePz, 10)} today${duePz > 10 ? ` (${duePz} waiting; 10 a day is plenty)` : ""}: your own mistakes, repeated at spaced intervals` : nG ? "Nothing due. Come back tomorrow" : "Import games first: your mistakes become puzzles", Math.min(duePz, 10), nG ? "puzzles" : "games", duePz ? "Solve" : nG ? "Open" : "Import")}
+      ${todo("king", "Endgames", dueEg ? `${Math.min(dueEg, 2)} today${dueEg > 2 ? ` (${dueEg} to learn in total)` : ""}: key positions you play out against the engine` : "Key positions you play out against the engine", Math.min(dueEg, 2), "endgames", "Train")}
       ${(p.tests || []).some((t) => !t.done) ? todo("test", "Thinking test", `In progress: ${(p.tests.find((t) => !t.done).items || []).length} position${(p.tests.find((t) => !t.done).items || []).length === 1 ? "" : "s"} done`, null, "test", "Continue") : ""}
       ${(p.tests || []).some((t) => !t.done) ? "" : todo("test", tests.length ? "Thinking test" : "Take the thinking test", tests.length ? (() => { const lt = tests[tests.length - 1]; const rated = lt.items.some((i) => i.kind !== "style" && i.rating); return `Last test ${esc(lt.date)}: ${rated ? `test rating ${lt.result?.overall ?? "–"}` : `${lt.items.length} style positions`}`; })() : "Measures calculation depth, style and player type", null, tests.length ? "results" : "test", tests.length ? "Results" : "Start")}
       ${todo("analyse", "Your games", nG ? `${nG} games analysed${last ? `, last report ${esc(last.date)}` : ""}` : "Load the last months from Lichess or Chess.com", null, "games", nG ? "Import new" : "Import")}
@@ -378,7 +379,10 @@ async function fetchGames(p, opts, status) {
     let name = $("#pgnName").value.trim();
     if (!name && pgns.length) name = mostFrequentName(pgns);
     if (name) { p.pgnName = name; save(); }
-    for (const pgn of pgns) out.push({ pgn, name, src: "pgn" });
+    // the time-control choice also applies to pasted games that say their time control (club games often don't)
+    let skippedTc = 0;
+    for (const pgn of pgns) { const tc = (/\[TimeControl "([^"]+)"/.exec(pgn) || [])[1]; if (tc && tc !== "?" && !tcMatches(tc, "pgn", opts.tf)) { skippedTc++; continue; } out.push({ pgn, name, src: "pgn" }); }
+    if (skippedTc) toast(`${skippedTc} pasted game${skippedTc === 1 ? "" : "s"} skipped: other time control than the ones you ticked.`);
   }
   if (failed.length && !out.length) throw new Error(failed.join(" · "));
   if (failed.length) toast(`Couldn't reach ${failed.map((f) => f.split(":")[0]).join(" and ")}; loading the other games.`);
@@ -401,7 +405,7 @@ async function keepAwake(on) {
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && running) keepAwake(true); });
 function jobUI(text, pct) {
-  const b = $("#jobBar"); b.classList.remove("hidden");
+  const b = $("#jobBar"); b.classList.remove("hidden"); b.classList.toggle("ongames", tab === "games" && !!$("#progText")); // the Games page has its own bar
   $("#jobText").textContent = text; if (pct !== undefined) $("#jobFill").style.width = pct.toFixed(1) + "%";
   const t = $("#progText"); if (t) { $("#prog").classList.remove("hidden"); t.textContent = text; if (pct !== undefined) $("#progBar").style.width = pct.toFixed(1) + "%"; }
   syncProgBtns();
@@ -581,7 +585,7 @@ function report(v) {
   const moreOpen = p.settings.repMore ?? innerWidth > 900;
   const tcBar = tcs.length > 1 ? `<div class="chips" id="repTc"><button class="chip ${sel.length ? "" : "on"}" data-rtc="">All (${gs.length})</button>${tcs.map((c) => `<button class="chip ${sel.includes(c) ? "on" : ""}" data-rtc="${c}">${TC_LABEL[c] || "Unknown"} (${gs.filter((g) => (TC_CATS.includes(g.tc) ? g.tc : "unknown") === c).length})</button>`).join("")}</div>` : "";
   v.innerHTML = `<div class="card" style="padding-bottom:10px">${periodBarHtml(p)}${tcBar}</div>
-  ${summaryHtml(A, D)}
+  ${summaryHtml(A, D, p)}
   <div class="card"><h2>Points to work on</h2>${D.weaknesses.length ? D.weaknesses.map((w) => `<div class="list-item weak"><b>${esc(w.title)}</b><span class="small">${esc(w.evidence)}</span>
      ${w.drills ? `<ul class="small">${w.drills.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}${w.links && w.links.length ? `<div class="small">${w.links.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(t)}</a>`).join(" · ")}</div>` : ""}${ddTheme(w.key) ? `<div style="margin-top:6px"><button class="btn secondary small" data-ddtheme="${ddTheme(w.key)}">In depth: your positions, principles, books & videos</button></div>` : ""}</div>`).join("") : `<p class="muted">No clear weak points. Analyse more games.</p>`}
     <p class="small" style="margin-top:8px"><a href="#" id="toWeak">All weak points in depth →</a></p></div>
@@ -598,7 +602,7 @@ function report(v) {
   <details class="small" style="margin-top:8px"><summary><b>What do these numbers mean?</b></summary>
   <ul>
     <li><b>Score</b> = your points as a percentage: a win is 1 point, a draw ½, a loss 0, divided by the number of games. So it's not a win/loss ratio: draws count for half. 50% means you score as much as your opponents, which is normal when the matchmaking puts you against equally rated players.</li>
-    <li><b>Accuracy</b> (0-100) = how close your moves are to Stockfish's best move, with the same formula as Lichess. Accuracy follows the win chance, so small inaccuracies in a balanced position cost more than in a position that's already won. Over a whole game, 90+ is very good, and 80-90 is normal for club level in rapid.</li>
+    <li><b>Accuracy</b> (0-100) = how close your moves are to Stockfish's best move, with the same formula as Lichess. Accuracy follows the win chance, so small inaccuracies in a balanced position cost more than in a position that's already won. Over a whole game, 90+ is very good; club players in rapid are often between 70 and 85. The phase table uses the plain average per move, which is always higher; the game accuracy weighs the critical moments more, like Lichess.</li>
     <li><b>Centipawn loss (CPL)</b> = how much worse than the engine's best move your move was, in hundredths of a pawn, averaged over your moves (evaluations capped at ±10 pawns, like Lichess). Club players are often around 40-80, masters under 25. The small range next to it is the 95% interval: the fewer games, the wider.</li>
     <li><b>Blunder / mistake / inaccuracy</b>: a move that costs at least 15% / 10% / 5% win chance (Lichess thresholds). Shown as a count and per 100 of your own moves.</li>
     <li><b>Converted / saved</b>: games where your win chance went above 85% (or below 15%), and how they ended.</li>
@@ -626,7 +630,10 @@ function report(v) {
   v.querySelectorAll(".spark .hit").forEach((c) => (c.onclick = () => { const t = $("#sparkTip", v); if (t) t.textContent = c.querySelector("title")?.textContent || ""; }));
   $("#repMoreBtn", v).onclick = () => { p.settings.repMore = !moreOpen; save(); const y = scrollY; go("report"); scrollTo(0, y); };
   v.querySelectorAll("[data-sumgo]").forEach((b) => (b.onclick = () => go(b.dataset.sumgo, JSON.parse(b.dataset.sumarg || "null") || undefined)));
-  v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
+  // a mistake opens in its own game (replay at that move) when the game is stored, else on the board
+  v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = (ev) => { ev.preventDefault(); const fen = b.dataset.errfen;
+    const g = Object.values(p.games).find((x) => x.san && x.errors.some((e) => e.fen === fen)); const e = g && g.errors.find((x) => x.fen === fen);
+    if (g) go("mygames", { id: g.id, ply: e.ply ?? (e.moveNo - 1) * 2 + (g.color === "w" ? 0 : 1) }); else go("board", { fen }); }));
   v.querySelectorAll("[data-ddtheme]").forEach((b) => (b.onclick = () => go("weak", { theme: b.dataset.ddtheme })));
   $("#toWeak", v) && ($("#toWeak", v).onclick = (e) => { e.preventDefault(); go("weak"); });
   v.querySelectorAll("[data-rtc]").forEach((b) => (b.onclick = () => { const c = b.dataset.rtc;
@@ -697,7 +704,8 @@ function training(v) {
     if (worst === "endgame" && !rec.includes("Endgame")) rec.unshift("Endgame");
   }
   const lastTest = (p.tests || []).filter((t) => t.done && Object.keys(t.result?.cats || {}).length).slice(-1)[0];
-  if (!rec.length) rec.push("Attack & mate", "Calculation", "Defence"); // no data yet: the basics that decide most games
+  if (p.level === "new") rec.splice(0, rec.length, "Attack & mate", "Defence", "Endgame"); // beginners: mates, not losing pieces, the basic endgames
+  else if (!rec.length) rec.push("Attack & mate", "Calculation", "Defence"); // no data yet: the basics that decide most games
   if (lastTest?.result) Object.entries(lastTest.result.cats).sort((a, b) => a[1].rating - b[1].rating).slice(0, 3).forEach(([c]) => { if (!rec.includes(c)) rec.unshift(c); });
   const all = TAC_CATS.concat(Object.keys(POS_GROUPS)).concat(["style", "Deep calculation"]);
   const prog = (c) => { const x = (p.practice || {})[c]; return x ? `${x.solved}/${x.n} solved · level ≈ ${Math.round(x.est)}` : "not started yet"; };
@@ -711,7 +719,7 @@ function training(v) {
       <li><b>Puzzles from your own games</b>: ${duePz} due today. <a href="#" data-go="puzzles">Go</a></li>
       <li><b>Module of the day</b>: 10 positions from the first recommended module, with the Think sheet for each position.</li>
       <li><b>Endgames</b>: 1 theory position to play out. <a href="#" data-go="endgames">Go</a></li>
-      <li><b>Play</b>: a few games at your usual speed${(p.tcs || []).some((t) => t === "bullet" || t === "blitz") ? " (with increment if you can, e.g. 3+2: you learn more when there's time to think)" : ""}. Afterwards, load them (Analyse → Load games) and look at your mistakes.</li></ol>
+      ${p.level === "new" ? `<li><b>Play the computer</b>: one game a day (<a href="#" data-go="learn">Train → Learn</a>); after two wins go up a level, and after every game press "Look at my mistakes".</li>` : `<li><b>Play</b>: a few games at your usual speed${(p.tcs || []).some((t) => t === "bullet" || t === "blitz") ? " (with increment if you can, e.g. 3+2: you learn more when there's time to think)" : ""}. Afterwards, load them (Analyse → Load games) and look at your mistakes.</li>`}</ol>
     ${D ? `<h3>Weekly schedule</h3>${D.plan.weekly.map((w) => `<div class="list-item ${w.weak ? "weak" : ""}"><b>${esc(w.what)} · ${w.mins} min/week</b><span class="small">${esc(w.how)}</span></div>`).join("")}` : ""}</div>
     <div class="card"><h2>All modules</h2><div class="scroll"><table>${all.map((c) => `<tr><td>${esc(MOD_LABEL(c))}</td><td class="small muted">${TAC_CATS.includes(c) || c === "Deep calculation" ? "tactical" : c === "style" ? "style" : "positional"}</td><td class="small">${prog(c)}</td><td><button class="btn secondary small" data-prac="${esc(c)}">Train</button></td></tr>`).join("")}</table></div></div>`;
   v.querySelectorAll("[data-prac]").forEach((b) => (b.onclick = () => go("practice", { cat: b.dataset.prac })));
@@ -986,7 +994,7 @@ function phasesHtml(F, total, C) {
   const leak = F.verdict && F.verdict !== "relative" ? F.weakest : null;
   const box = (k) => { const c = K[k], x = P[k];
     return `<div class="phase ${k === leak ? "leak" : k === F.strongest && K[k].avg > 0 ? "gainer" : ""}"><div class="pn">${PH_NAME[k]}</div>
-      <div class="pv">${sgn(c.avg)}</div><div class="small rng">${c.lo !== null ? `95% range ${sgn(c.lo)} to ${sgn(c.hi)}` : "range needs 2+ games"}</div>
+      <div class="pv">${sgn(c.avg)}</div><div class="small rng">${c.lo !== null ? `likely between ${sgn(c.lo)} and ${sgn(c.hi)}` : "range needs 2+ games"}</div>
       <div class="small muted">reached in ${np(x.games, n)} games${x.games ? `; in those games ${sgn(x.avg)} each` : ""}</div>
       ${x.games ? `<div class="small">lost ≥ 10 points in ${np(Math.round((x.lost10 * x.games) / 100), x.games)} · gained ≥ 10 in ${np(Math.round((x.won10 * x.games) / 100), x.games)}</div>` : ""}</div>`; };
   const W = F.weakest ? K[F.weakest] : null;
@@ -1012,8 +1020,8 @@ function phasesHtml(F, total, C) {
       <div><b>Middlegame</b>${fl.midMove ? ` from move ${fl.midMove}` : ""}${fl.endMove ? ` → ${fl.endMove}` : ""}<div class="small muted">${fl.afterOpening !== null ? `you come out of the opening at ${fl.afterOpening}% (${sgn(fl.cpAfterOpening, 2)}) · ` : ""}${np(E.middlegame, n)} games ended here</div></div>
       <div><b>Endgame</b>${fl.endMove ? ` from move ${fl.endMove}` : ""}<div class="small muted">${fl.afterMiddlegame !== null ? `reached in ${np(E.endgame, n)} games, entering at ${fl.afterMiddlegame}% (${sgn(fl.cpAfterMiddlegame, 2)})` : "no game reached an endgame"}</div></div></div>
     <h3>You against your opponents, per phase</h3>
-    ${C ? `<div class="scroll"><table class="acctable"><tr><th>Phase</th><th>Your CPL</th><th>Opponents' CPL</th><th>Your accuracy</th><th>Opponents'</th><th>Your mistakes + blunders</th><th>Opponents'</th></tr>${["opening", "middlegame", "endgame", "all"].map(accRow).join("")}</table></div>
-      <p class="small muted">CPL = average centipawn loss per move (lower is better). The small range is the 95% interval: with few games it is wide, and two numbers whose ranges overlap aren't really different. Everyone makes the most errors in the middlegame, so compare yourself with your opponents in the same phase, not one phase with another.${C.games < n ? ` Based on ${C.games} game${C.games === 1 ? "" : "s"}: re-analyse the others to include them.` : ""}</p>`
+    ${C ? `<div class="scroll"><table class="acctable"><tr><th>Phase</th><th>Your loss per move (CPL)</th><th>Opponents'</th><th>Your accuracy*</th><th>Opponents'</th><th>Your mistakes + blunders</th><th>Opponents'</th></tr>${["opening", "middlegame", "endgame", "all"].map(accRow).join("")}</table></div>
+      <p class="small muted">* Accuracy per phase is the plain average per move; the "Whole game" row is the game accuracy (Lichess formula), the same number as in the overview. CPL = average centipawn loss per move (lower is better). The small range is the 95% interval: with few games it is wide, and two numbers whose ranges overlap aren't really different. Everyone makes the most errors in the middlegame, so compare yourself with your opponents in the same phase, not one phase with another.${C.games < n ? ` Based on ${C.games} game${C.games === 1 ? "" : "s"}: re-analyse the others to include them.` : ""}</p>`
       : `<p class="small muted">Re-analyse your games to compare your centipawn loss and errors with your opponents', phase by phase.</p>`}
     <h3>From the opening to the result</h3>
     <p class="small muted">Each row is a group of games, sorted by how you stood the moment the opening ended (Stockfish: <b>better</b> = at least a pawn up, <b>equal</b> = between a pawn down and a pawn up, <b>worse</b> = at least a pawn down). Follow the row to the right to see how those same games stood when the endgame began, and how they ended.</p>
@@ -1036,7 +1044,8 @@ const DAILY = {
   technique: ["10 min: one endgame from Train → Endgames", "Learn one key endgame position a week", "In every endgame: bring your king forward first"],
   time: ["Play a few games with increment (e.g. 3+2 or 10+5) instead of no increment", "10 min: easy puzzles fast (Lichess Puzzle Storm) to decide simple moves quicker", "In every game: check your clock at moves 10, 20 and 30"],
 };
-function summaryHtml(A, D) {
+function summaryHtml(A, D, p) {
+  const mins = Math.max(10, Math.round(((p?.hours || 2) * 60) / 7 / 5) * 5);
   const M = A.errMatrix; if (!M) return "";
   const tot = Object.values(M).flatMap((cs) => Object.values(cs)).reduce((a, x) => a + x.n, 0);
   const cells = Object.entries(M).flatMap(([ph, cs]) => Object.entries(cs).map(([c, x]) => ({ ph, c, ...x }))).filter((x) => x.n).sort((a, b) => b.perGame - a.perGame).slice(0, 2);
@@ -1045,7 +1054,7 @@ function summaryHtml(A, D) {
   const res = `You scored <b>${A.scorePct}%</b> in ${A.games} game${A.games === 1 ? "" : "s"}: ${A.wins} won, ${A.draws} drawn, ${A.losses} lost.`;
   return `<div class="card insh"><h2>In short</h2><p>${res}</p>
     ${cells.length ? `<p><b>Where your points go</b> (${tot} mistakes and blunders in total):</p><ol>${cells.map((x) => `<li><b>${CN[x.c]} in the ${x.ph}</b>: ${x.n} of ${tot}${x.ex[0] ? `, for example <a href="#" data-errfen="${esc(x.ex[0].fen)}">move ${x.ex[0].moveNo} ${esc(x.ex[0].played)}</a> instead of ${esc(x.ex[0].best || "?")}` : ""}.</li>`).join("")}</ol>` : `<p>No mistakes or blunders in these games.</p>`}
-    ${theme ? `<p><b>Do this, 15 minutes a day:</b></p><ul>${DAILY[theme].map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    ${theme ? `<p><b>Do this, about ${mins} minutes a day:</b></p><ul>${DAILY[theme].map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
     <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-sumgo="puzzles" data-sumarg='${JSON.stringify(theme === "opening" ? { phase: "opening" } : { cause: theme })}'>Train my mistakes</button><button class="btn secondary" data-sumgo="weak" data-sumarg='${JSON.stringify({ theme })}'>Explain it in depth</button></div>` : ""}</div>`;
 }
 function errMatrixHtml(A) {
@@ -1059,7 +1068,7 @@ function errMatrixHtml(A) {
   const cell = (x) => (x.n ? `<td class="${x.perGame === max ? "errmax" : ""}"><b>${x.n}</b>${x.blunders ? ` <span class="muted small">(${x.blunders} bl.)</span>` : ""}<div class="small">−${x.perGame}/game</div></td>` : `<td class="muted">–</td>`);
   const ex = phs.flatMap((ph) => causes.flatMap((c) => M[ph][c].ex.map((e) => ({ ...e, ph, c })))).sort((a, b) => b.drop - a.drop).slice(0, 8);
   return `<div class="card"><h2>What went wrong</h2>
-    <p class="small muted" style="margin-top:-6px">All ${tot} mistakes and blunders, by phase and by cause. This is shown even for phases you win on balance: your opponents erring more doesn't make your own errors free. "−x/game" = points of win chance these errors cost per game.</p>
+    <p class="small muted" style="margin-top:-6px">All ${tot} mistakes and blunders, by phase and by cause. This is shown even for phases you win on balance: your opponents erring more doesn't make your own errors free. "−x/game" = points of win chance these errors cost per game. These are only <b>your</b> errors; your opponents' errors give points back, so a phase can be close to zero overall while your own errors in it still cost a lot.</p>
     <div class="scroll"><table class="errtable"><tr><th>Phase</th>${causes.map((c) => `<th>${ERR_CAUSES[c]}</th>`).join("")}</tr>
       ${phs.map((ph) => `<tr><td>${PH_NAME[ph]}</td>${causes.map((c) => cell(M[ph][c])).join("")}</tr>`).join("")}
       <tr class="tot"><td>Total</td>${causes.map((c) => (colTot(c) ? `<td>${np(colTot(c), tot)}<div class="small">−${colLost(c)}/game</div></td>` : `<td class="muted">–</td>`)).join("")}</tr></table></div>
@@ -1124,6 +1133,9 @@ function bindPeriodBar(v, p, tabName, arg) {
 
 // ------------------------------------------------------------------ TIMELINE (stats over time)
 function timelineData(games) {
+  // ratings of different time controls don't mix: the rating line follows your most played one (not bullet if possible)
+  const tcCount = {}; for (const g of games) if (+g.playerElo > 0) tcCount[g.tc] = (tcCount[g.tc] || 0) + 1;
+  const tcMain = Object.entries(tcCount).sort((a, b) => (a[0] === "bullet") - (b[0] === "bullet") || b[1] - a[1])[0]?.[0] || null;
   const gs = games.map((g) => [gameTime(g), g]).filter(([t]) => t !== null).sort((a, b) => a[0] - b[0]);
   if (gs.length < 2) return null;
   const span = gs[gs.length - 1][0] - gs[0][0];
@@ -1136,13 +1148,24 @@ function timelineData(games) {
     const moves = list.reduce((a, g) => a + Object.values(g.phaseMoves || {}).reduce((x, y) => x + y, 0), 0);
     const pst = list.filter((g) => g.pst?.me).map((g) => Object.values(g.pst.me).reduce((a, r) => [a[0] + r[0], a[1] + r[1]], [0, 0])).reduce((a, r) => [a[0] + r[0], a[1] + r[1]], [0, 0]);
     const bl = list.reduce((a, g) => a + g.errors.filter((e) => e.label === "blunder").length, 0);
-    const elo = avg(list.map((g) => +g.playerElo).filter((x) => x > 0));
+    const elo = avg(list.filter((g) => g.tc === tcMain).map((g) => +g.playerElo).filter((x) => x > 0));
     const label = weekly ? `week of ${new Date(k).toLocaleDateString(undefined, { day: "numeric", month: "short" })}` : new Date(k + "-01T00:00:00Z").toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: "UTC" });
     return { k, label, n: list.length, score: Math.round(100 * avg(list.map((g) => g.score))), acc: avg(list.map((g) => g.accuracy).filter((x) => x != null)), cpl: pst[0] ? pst[1] / pst[0] : null, bl100: moves ? (100 * bl) / moves : null, elo };
   });
-  return { weekly, rows };
+  return { weekly, rows, tcMain };
 }
-function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
+// one trend rule for the sentence and the charts: first half of the period vs second half, weighted by games,
+// and a change only counts when it is bigger than a fixed amount per measure
+function trendOf(rows, f, up, thr) {
+  const w = (a) => { const xs = a.filter((r) => f(r) != null && isFinite(f(r))); const n = xs.reduce((s, r) => s + r.n, 0); return n ? xs.reduce((s, r) => s + f(r) * r.n, 0) / n : null; };
+  const mid = Math.floor(rows.length / 2), a = w(rows.slice(0, mid)), b = w(rows.slice(rows.length - mid));
+  const n = rows.reduce((s, r) => s + (f(r) != null ? r.n : 0), 0);
+  if (a == null || b == null) return { state: "few", a, b, n };
+  const diff = b - a;
+  return { a, b, n, diff, state: n < 10 ? "few" : Math.abs(diff) < thr ? "same" : (diff > 0) === up ? "better" : "worse" };
+}
+const TRENDS = { elo: [(r) => r.elo, true, 25, 0, ""], score: [(r) => r.score, true, 8, 0, "%"], acc: [(r) => r.acc, true, 1.5, 1, ""], cpl: [(r) => r.cpl, false, 5, 0, ""], bl100: [(r) => r.bl100, false, 0.5, 1, ""] };
+function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up", key = null }) {
   const pts = rows.map((r, i) => [i, f(r), r]).filter(([, y]) => y !== null && y !== undefined && isFinite(y));
   if (pts.length < 2) return "";
   const W = 320, H = 120, L = 34, R = 10, T = 12, Bm = 22;
@@ -1151,11 +1174,8 @@ function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
   const X = (i) => L + (rows.length === 1 ? 0 : (i * (W - L - R)) / (rows.length - 1)), Y = (y) => T + (1 - (y - lo) / (hi - lo)) * (H - T - Bm);
   const fmt = (y) => (+y).toFixed(digits) + unit;
   const d = pts.map(([i, y], k) => `${k ? "L" : "M"}${X(i).toFixed(1)},${Y(y).toFixed(1)}`).join(" ");
-  // trend: first half of the games vs second half (weighted by games), not first point vs last point
-  const half = (a) => { const w = a.reduce((s, p) => s + p[2].n, 0); return w ? a.reduce((s, p) => s + p[1] * p[2].n, 0) / w : null; };
-  const mid = Math.floor(pts.length / 2), first = half(pts.slice(0, mid)), last = half(pts.slice(pts.length - mid)), delta = last - first;
-  const nGames = pts.reduce((s, p) => s + p[2].n, 0), steady = nGames < 10 || Math.abs(delta) < Math.abs(hi - lo) * 0.12;
-  const good = better === "up" ? delta > 0 : delta < 0;
+  const TR = TRENDS[key], tr = trendOf(rows, TR[0], TR[1], TR[2]);
+  const first = tr.a ?? pts[0][1], last = tr.b ?? pts[pts.length - 1][1], steady = tr.state === "few" || tr.state === "same", good = tr.state === "better", nGames = tr.n;
   const ticks = [lo + pad, hi - pad];
   return `<figure class="spark"><figcaption><b>${esc(title)}</b> <span class="small ${steady ? "muted" : good ? "up" : "down"}" title="Average of the first half of the period vs the second half">${fmt(first)} → ${fmt(last)}${steady ? (nGames < 10 ? " · too few games for a trend" : " · no clear change") : ""}</span></figcaption>
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)} over time, from ${fmt(first)} to ${fmt(last)}">
@@ -1166,16 +1186,13 @@ function sparkHtml(rows, f, { title, unit = "", digits = 0, better = "up" }) {
     </svg></figure>`;
 }
 function improvingSentence(rows) {
-  // first half of the games vs second half, the three things that matter most
-  const w = (a, f) => { const xs = a.filter((r) => f(r) != null); const n = xs.reduce((s, r) => s + r.n, 0); return n ? xs.reduce((s, r) => s + f(r) * r.n, 0) / n : null; };
-  const mid = Math.floor(rows.length / 2), A = rows.slice(0, mid), B = rows.slice(rows.length - mid);
-  const n = rows.reduce((s, r) => s + r.n, 0); if (n < 10 || mid < 1) return `Not enough games yet to tell (${n}): you need about 10 or more in the period.`;
-  const parts = [], good = [], bad = [];
-  const cmp = (label, f, up, thr, d = 0) => { const a = w(A, f), b = w(B, f); if (a == null || b == null) return; const diff = b - a; if (Math.abs(diff) < thr) return; ((diff > 0) === up ? good : bad).push(`${label} ${a.toFixed(d)} → ${b.toFixed(d)}`); };
-  cmp("rating", (r) => r.elo, true, 25); cmp("accuracy", (r) => r.acc, true, 1.5, 1); cmp("blunders per 100 moves", (r) => r.bl100, false, 0.5, 1); cmp("score", (r) => r.score, true, 8);
+  const n = rows.reduce((s, r) => s + r.n, 0); if (n < 10 || rows.length < 2) return `Not enough games yet to tell (${n}): you need about 10 or more in the period.`;
+  const NAME = { elo: "rating", score: "score", acc: "accuracy", cpl: "centipawn loss", bl100: "blunders per 100 moves" };
+  const good = [], bad = [];
+  for (const [k, [f, up, thr, d, u]] of Object.entries(TRENDS)) { const t = trendOf(rows, f, up, thr); if (t.state === "better") good.push(`${NAME[k]} ${t.a.toFixed(d)}${u} → ${t.b.toFixed(d)}${u}`); else if (t.state === "worse") bad.push(`${NAME[k]} ${t.a.toFixed(d)}${u} → ${t.b.toFixed(d)}${u}`); }
   if (!good.length && !bad.length) return "<b>About the same:</b> no clear change between the first and the second half of the period.";
-  if (good.length) parts.push(`<b>Better</b>: ${good.join(", ")}`); if (bad.length) parts.push(`<b>Worse</b>: ${bad.join(", ")}`);
-  return `${good.length > bad.length ? "<b>Yes, you're improving.</b> " : bad.length > good.length ? "<b>Not yet.</b> " : ""}Second half of the period compared with the first: ${parts.join("; ")}.`;
+  const verdict = good.length && !bad.length ? "<b>Yes, you're improving.</b>" : bad.length && !good.length ? "<b>Not yet: you're doing a bit worse.</b>" : "<b>Mixed:</b> some things got better, others worse.";
+  return `${verdict} Second half of the period compared with the first: ${good.length ? `better ${good.join(", ")}` : ""}${good.length && bad.length ? "; " : ""}${bad.length ? `worse ${bad.join(", ")}` : ""}.`;
 }
 function timelineHtml(games) {
   const D = timelineData(games);
@@ -1184,11 +1201,11 @@ function timelineHtml(games) {
   const r = D.rows;
   return `<div class="card"><h2>Progress over time</h2><p>${improvingSentence(r)}</p><p class="small muted">Per ${D.weekly ? "week" : "month"}, ${r.length} points. The numbers next to each title compare the first half of the period with the second half. Hover or tap a point for its value and number of games; points with few games jump around more.</p>
     <div class="sparks">${[
-      sparkHtml(r, (x) => x.elo, { title: "Rating (from your games)", better: "up" }),
-      sparkHtml(r, (x) => x.score, { title: "Score", unit: "%", better: "up" }),
-      sparkHtml(r, (x) => x.acc, { title: "Accuracy", digits: 1, better: "up" }),
-      sparkHtml(r, (x) => x.cpl, { title: "Centipawn loss (lower is better)", better: "down" }),
-      sparkHtml(r, (x) => x.bl100, { title: "Blunders per 100 moves (lower is better)", digits: 1, better: "down" }),
+      sparkHtml(r, (x) => x.elo, { title: `Rating (${D.tcMain && TC_LABEL[D.tcMain] ? TC_LABEL[D.tcMain].toLowerCase() + " games" : "from your games"})`, key: "elo" }),
+      sparkHtml(r, (x) => x.score, { title: "Score", unit: "%", key: "score" }),
+      sparkHtml(r, (x) => x.acc, { title: "Accuracy", digits: 1, key: "acc" }),
+      sparkHtml(r, (x) => x.cpl, { title: "Average loss per move, centipawns (lower is better)", key: "cpl" }),
+      sparkHtml(r, (x) => x.bl100, { title: "Blunders per 100 moves (lower is better)", digits: 1, key: "bl100" }),
     ].join("")}</div>
     <div class="small" id="sparkTip" aria-live="polite"></div>
     <details class="small"><summary>Show as a table</summary><div class="scroll"><table><tr><th>${D.weekly ? "Week" : "Month"}</th><th>Games</th><th>Rating</th><th>Score</th><th>Accuracy</th><th>CPL</th><th>Blunders/100</th></tr>
@@ -1215,30 +1232,31 @@ function mygames(v, arg) {
       <label class="f">Colour<select id="gfCol"><option value="">Both</option><option value="w" ${F.color === "w" ? "selected" : ""}>White</option><option value="b" ${F.color === "b" ? "selected" : ""}>Black</option></select></label>
       <label class="f">Result<select id="gfRes"><option value="">All</option><option value="win" ${F.res === "win" ? "selected" : ""}>Won</option><option value="draw" ${F.res === "draw" ? "selected" : ""}>Draw</option><option value="loss" ${F.res === "loss" ? "selected" : ""}>Lost</option></select></label>
       <label class="f" style="flex:1;min-width:160px">Search<input id="gfQ" value="${esc(F.q)}" placeholder="opponent or opening"></label></div>
-    <p class="small"><b>${list.length}</b> game${list.length === 1 ? "" : "s"} shown. <span class="muted">Accuracy is the Lichess formula (0-100). <span class="pill blunder">n</span> blunders, <span class="pill mistake">n</span> mistakes. Tap a game to replay it.</span></p>
+    <p class="small"><b>${list.length}</b> game${list.length === 1 ? "" : "s"} shown. <span class="muted">Accuracy is the Lichess formula (0-100, higher is better). Tap a game to replay it.</span></p>
     ${list.length ? `<div class="glist">${list.map((g) => { const opp = g.color === "w" ? g.black : g.white; const e = (l) => g.errors.filter((x) => x.label === l).length;
       return `<button class="grow ${sel && sel.id === g.id ? "on" : ""}" data-gid="${esc(g.id)}"><span class="gres ${resW(g).toLowerCase()}">${resW(g)}</span>
         <span class="gmain"><b>vs ${esc(opp || "?")}</b> <span class="muted small">${esc(g.opponentElo || "")}</span><br><span class="small muted">${dt(g)} · ${g.color === "w" ? "White" : "Black"} · ${esc(TC_LABEL[g.tc] || g.tc || "")}${g.timeControl && g.timeControl !== "-" ? ` ${esc(fmtTc(g.timeControl))}` : ""}<br>${esc(g.opening || "")}</span></span>
-        <span class="gnum"><b>${g.accuracy ?? "–"}</b><span class="small muted">accuracy</span><span><span class="pill blunder">${e("blunder")}</span><span class="pill mistake">${e("mistake")}</span></span></span></button>`; }).join("")}</div>` : `<p class="muted">No games match. Change the period or the filters, or load games on the Games tab.</p>`}</div>`;
+        <span class="gnum"><b>${g.accuracy ?? "–"}</b><span class="small muted">accuracy</span><span class="small">${e("blunder")} blunder${e("blunder") === 1 ? "" : "s"} · ${e("mistake")} mistake${e("mistake") === 1 ? "" : "s"}</span></span></button>`; }).join("")}</div>` : `<p class="muted">No games match. Change the period or the filters, or load games on the Games tab.</p>`}</div>`;
   bindPeriodBar(v, p, "mygames");
   const setF = (k, val) => { F[k] = val; save(); go("mygames"); };
   $("#gfTc", v).onchange = (e) => setF("tc", e.target.value); $("#gfCol", v).onchange = (e) => setF("color", e.target.value); $("#gfRes", v).onchange = (e) => setF("res", e.target.value);
   let qt; $("#gfQ", v).oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { F.q = e.target.value; save(); go("mygames"); setTimeout(() => { const i = $("#gfQ"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }); }, 400); };
   v.querySelectorAll("[data-gid]").forEach((b) => (b.onclick = () => { go("mygames", { id: b.dataset.gid }); window.scrollTo({ top: 0 }); }));
-  if (sel) bindGameDetail(v, sel);
+  const firstErr = sel && p.level === "new" && arg?.ply == null ? sel.errors.filter((e) => e.label !== "inaccuracy").sort((a, b) => (a.ply ?? 0) - (b.ply ?? 0))[0] : null;
+  if (sel) bindGameDetail(v, sel, arg?.ply ?? (firstErr ? firstErr.ply : undefined));
 }
 function gameDetailHtml(g, dt, resW) {
   const opp = g.color === "w" ? g.black : g.white;
   const ser = g.errors.filter((e) => e.label !== "inaccuracy");
   return `<div class="card gdetail"><div class="row" style="justify-content:space-between;align-items:flex-start"><h2 style="margin:0">${resW(g)} vs ${esc(opp || "?")}</h2><button class="btn secondary small" id="gdClose">Close</button></div>
     <p class="small muted">${dt(g)} · you played ${g.color === "w" ? "White" : "Black"} · ${esc(g.opening || "")}${g.termination ? ` · ${esc(g.termination)}` : ""}${g.site && /^https?:/.test(g.site) ? ` · <a href="${esc(g.site)}" target="_blank" rel="noopener">open on the site</a>` : ""}</p>
-    <div class="stats"><div class="stat"><div class="v">${g.accuracy ?? "–"}</div><div class="l">accuracy</div></div>
+    ${P().level === "new" ? `<p>${ser.length ? `You made <b>${ser.length} big mistake${ser.length === 1 ? "" : "s"}</b> in this game. The board starts at the first one: read what happened, then press ▶ to see the game go on.` : "No big mistakes in this game. Well played!"}</p>` : `<div class="stats"><div class="stat"><div class="v">${g.accuracy ?? "–"}</div><div class="l">accuracy</div></div>
       <div class="stat"><div class="v">${g.pst?.me ? Math.round(Object.values(g.pst.me).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.me).reduce((a, r) => a + r[0], 0))) : "–"}</div><div class="l">centipawn loss${g.pst?.opp ? ` · opponent ${Math.round(Object.values(g.pst.opp).reduce((a, r) => a + r[1], 0) / Math.max(1, Object.values(g.pst.opp).reduce((a, r) => a + r[0], 0)))}` : ""}</div></div>
-      <div class="stat"><div class="v">${ser.length}</div><div class="l">mistakes + blunders</div></div></div>
-    ${g.san ? `<div class="gd2"><div><div id="gdBoard"></div><div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary small" id="gdStart">⏮</button><button class="btn secondary small" id="gdBack">◀</button><button class="btn secondary small" id="gdFwd">▶</button><button class="btn secondary small" id="gdEnd">⏭</button><button class="btn secondary small" id="gdBoardOpen">Open on Board</button></div></div>
-      <div><div id="gdGraph" class="evgraph" title="Evaluation through the game; tap to jump"></div><div class="small muted">Tap a move (or the graph) to see the position; arrow keys work too. <span style="color:var(--bad);font-weight:700">Red</span> = blunder, <span style="color:#b5651d;font-weight:650">orange</span> = mistake, <span style="text-decoration:underline dotted">dotted</span> = inaccuracy.</div><div class="gdmoves" id="gdMoves"></div><div id="gdNote" class="small" style="margin-top:8px"></div></div></div>`
+      <div class="stat"><div class="v">${ser.length}</div><div class="l">mistakes + blunders</div></div></div>`}
+    ${g.san ? `<div class="gd2"><div><div id="gdBoard"></div><div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary small" id="gdStart">⏮</button><button class="btn secondary small" id="gdBack">◀</button><button class="btn secondary small" id="gdFwd">▶</button><button class="btn secondary small" id="gdEnd">⏭</button><button class="btn secondary small" id="gdBoardOpen">Open on Board</button></div><div id="gdNote" class="small" style="margin-top:8px"></div></div>
+      <div><div class="small muted" style="display:flex;justify-content:space-between"><span>▲ better for you</span><span>▼ better for your opponent</span></div><div id="gdGraph" class="evgraph" title="Evaluation through the game; tap to jump"></div><div class="small muted">Tap a move (or the graph) to see the position; arrow keys work too. <span style="color:var(--bad);font-weight:700">Red</span> = blunder, <span style="color:#b5651d;font-weight:650">orange</span> = mistake, <span style="text-decoration:underline dotted">dotted</span> = inaccuracy.</div><div class="gdmoves" id="gdMoves"></div></div></div>`
       : `<p class="small muted">The full move list is kept for games analysed from v33 on. For this game, open the mistakes below.</p>`}
-    ${ser.length ? `<h3>Mistakes and blunders</h3>${ser.map((e) => `<div class="list-item weak errrow"><div><b>Move ${e.moveNo}: ${esc(e.played)}</b> <span class="muted">best was</span> <b>${esc(e.best || "?")}</b> <span class="pill ${e.label}">${e.label} −${Math.round(e.drop)}%</span><div class="small muted">${esc(PH_NAME[e.phase] || e.phase || "")}${(e.tags || []).length ? ` · ${esc(e.tags.join(", "))}` : ""}</div></div><button class="btn secondary small" data-errfen="${esc(e.fen)}">Open on board</button></div>`).join("")}` : `<p class="small">No mistakes or blunders in this game.</p>`}</div>`;
+    ${ser.length ? `<h3>Mistakes and blunders</h3>${ser.map((e) => `<div class="list-item weak errrow"><div><b>Move ${e.moveNo}: ${esc(e.played)}</b> <span class="muted">best was</span> <b>${esc(e.best || "?")}</b> ${P().level === "new" ? `<div class="small">${esc(plainMistake(e))}</div>` : `<span class="pill ${e.label}">${e.label} −${Math.round(e.drop)}%</span><div class="small muted">${esc(PH_NAME[e.phase] || e.phase || "")}${(e.tags || []).length ? ` · ${esc(e.tags.join(", "))}` : ""}</div>`}</div><button class="btn secondary small" data-errfen="${esc(e.fen)}">${g.san ? "Show" : "Open on board"}</button></div>`).join("")}` : `<p class="small">No mistakes or blunders in this game.</p>`}</div>`;
 }
 // the evaluation through the game from the player's side (+ = good for you), with your mistakes as dots
 function evalGraphSvg(ev, color, errAt) {
@@ -1249,15 +1267,15 @@ function evalGraphSvg(ev, color, errAt) {
   const dots = Object.entries(errAt).filter(([, e]) => e.label !== "inaccuracy").map(([k, e]) => `<circle cx="${x(+k + 1)}" cy="${y(ev[+k + 1] ?? 0)}" r="3" class="${e.label}"><title>${e.played}: ${e.label}</title></circle>`).join("");
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"><rect x="0" y="0" width="${W}" height="${H / 2}" class="up"/><line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" class="mid"/><polyline points="${pts}" class="evl"/>${dots}<g class="curline"><line x1="0" x2="0" y1="0" y2="${H}"/></g></svg>`;
 }
-function bindGameDetail(v, g) {
+function bindGameDetail(v, g, startPly) {
   $("#gdClose", v).onclick = () => go("mygames");
-  v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
+  if (!g.san) v.querySelectorAll("[data-errfen]").forEach((b) => (b.onclick = () => go("board", { fen: b.dataset.errfen })));
   if (!g.san) return;
   const brd = new Board($("#gdBoard", v), { interactive: false }); brd.setOrientation(g.color);
   const fens = [new Chess().fen()], lasts = [null]; const c = new Chess();
   for (const s of g.san) { try { const m = c.move(s); fens.push(c.fen()); lasts.push([m.from, m.to]); } catch { break; } }
   const errAt = {}; for (const e of g.errors) { const ply = e.ply ?? (e.moveNo - 1) * 2 + (g.color === "w" ? 0 : 1); errAt[ply] = e; }
-  let i = 0;
+  let i = startPly != null ? Math.min(startPly, fens.length - 1) : 0;
   const box = $("#gdMoves", v);
   box.innerHTML = g.san.map((s, k) => `${k % 2 === 0 ? `<span class="mn">${k / 2 + 1}.</span>` : ""}<button class="mv ${errAt[k] ? errAt[k].label : ""}" data-ply="${k + 1}">${esc(s)}</button>`).join(" ");
   const graph = $("#gdGraph", v);
@@ -1266,8 +1284,10 @@ function bindGameDetail(v, g) {
     const nextErr = errAt[i]; // at the position before your mistake: show the better move as an arrow
     if (nextErr && nextErr.best) { try { const mm = new Chess(fens[i]).move(nextErr.best); brd.setArrows([{ from: mm.from, to: mm.to }]); } catch {} }
     graph?.querySelector(".curline")?.setAttribute("transform", `translate(${(i / Math.max(1, fens.length - 1)) * 300},0)`);
-    const evTxt = g.ev && g.ev[i] != null ? `<div class="small muted">Stockfish: ${Math.abs(g.ev[i]) >= 1500 ? (g.ev[i] > 0 ? "White is winning" : "Black is winning") : `${g.ev[i] > 0 ? "+" : ""}${(g.ev[i] / 100).toFixed(1)} (${Math.abs(g.ev[i]) < 70 ? "about equal" : (g.ev[i] > 0) === (g.color === "w") ? "better for you" : "better for your opponent"})`}${nextErr && nextErr.best ? ` · here you played <b>${esc(nextErr.played)}</b>; the arrow shows <b>${esc(nextErr.best)}</b>` : ""}</div>` : "";
-    const e = errAt[i - 1]; $("#gdNote", v).innerHTML = evTxt + (e ? `<div class="feedback ${e.label === "inaccuracy" ? "info" : "warn"}"><b>${esc(e.played)}</b> was ${e.label === "inaccuracy" ? "an" : "a"} ${e.label} (−${Math.round(e.drop)}% win chance). Better was <b>${esc(e.best || "?")}</b>${e.bestLine ? `: ${esc(e.bestLine)}` : ""}.</div>` : ""); };
+    const evTxt = g.ev && g.ev[i] != null ? `<div class="small muted">Stockfish (+ = White better): ${Math.abs(g.ev[i]) >= 1500 ? (g.ev[i] > 0 ? "White is winning" : "Black is winning") : `${g.ev[i] > 0 ? "+" : ""}${(g.ev[i] / 100).toFixed(1)} (${Math.abs(g.ev[i]) < 70 ? "about equal" : (g.ev[i] > 0) === (g.color === "w") ? "better for you" : "better for your opponent"})`}${nextErr && nextErr.best ? ` · here you played <b>${esc(nextErr.played)}</b>; the arrow shows <b>${esc(nextErr.best)}</b>` : ""}</div>` : "";
+    const e = errAt[i - 1];
+    if (P().level === "new") { const nx = errAt[i]; $("#gdNote", v).innerHTML = nx && nx.label !== "inaccuracy" ? `<div class="feedback warn"><b>Here you played ${esc(nx.played)}.</b> ${esc(plainMistake(nx))}${nx.best ? ` A better move was <b>${esc(nx.best)}</b> (the arrow).` : ""}</div>` : e && e.label !== "inaccuracy" ? `<div class="feedback warn">${esc(plainMistake(e))}</div>` : ""; return; }
+    $("#gdNote", v).innerHTML = evTxt + (e ? `<div class="feedback ${e.label === "inaccuracy" ? "info" : "warn"}"><b>${esc(e.played)}</b> was ${e.label === "inaccuracy" ? "an" : "a"} ${e.label} (−${Math.round(e.drop)}% win chance). Better was <b>${esc(e.best || "?")}</b>${e.bestLine ? `: ${esc(e.bestLine)}` : ""}.</div>` : ""); };
   box.querySelectorAll(".mv").forEach((b) => (b.onclick = () => { i = +b.dataset.ply; show(); }));
   $("#gdStart", v).onclick = () => { i = 0; show(); }; $("#gdEnd", v).onclick = () => { i = fens.length - 1; show(); };
   $("#gdBack", v).onclick = () => { i = Math.max(0, i - 1); show(); }; $("#gdFwd", v).onclick = () => { i = Math.min(fens.length - 1, i + 1); show(); };
@@ -1277,6 +1297,8 @@ function bindGameDetail(v, g) {
   const key = (ev) => { if (!document.body.contains(box)) return removeEventListener("keydown", key); if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) return;
     if (ev.key === "ArrowRight") { i = Math.min(fens.length - 1, i + 1); show(); ev.preventDefault(); } else if (ev.key === "ArrowLeft") { i = Math.max(0, i - 1); show(); ev.preventDefault(); } };
   addEventListener("keydown", key);
+  // the mistakes listed below the replay jump to that moment of the game
+  v.querySelectorAll(".gdetail [data-errfen]").forEach((b) => (b.onclick = () => { const k = fens.findIndex((f) => f.split(" ").slice(0, 4).join(" ") === b.dataset.errfen.split(" ").slice(0, 4).join(" ")); if (k >= 0) { i = k; show(); $("#gdBoard", v).scrollIntoView({ block: "nearest" }); } else go("board", { fen: b.dataset.errfen }); }));
   show();
 }
 
@@ -1284,7 +1306,12 @@ function bindGameDetail(v, g) {
 let cmpExtern = null; // players read from a backup file (kept in memory only, never saved)
 function compare(v) {
   const me = P(); me.settings ||= {};
-  const others = Object.values(S.players).filter((x) => x.id !== me.id).map((x) => ({ key: "p:" + x.id, name: x.name, p: x }))
+  // yourself in an earlier period: the same length just before the chosen period, or all your games
+  const perNow = periodOf(me);
+  const prevPer = (() => { if (perNow.kind === "all") return null; if (perNow.kind !== "custom") { const d = +perNow.kind; return { kind: "custom", from: new Date(Date.now() - 2 * d * 86400000).toISOString().slice(0, 10), to: new Date(Date.now() - d * 86400000 - 86400000).toISOString().slice(0, 10) }; }
+    if (!perNow.from) return null; const f = Date.parse(perNow.from), t = perNow.to ? Date.parse(perNow.to) : Date.now(), len = t - f + 86400000; return { kind: "custom", from: new Date(f - len).toISOString().slice(0, 10), to: new Date(f - 86400000).toISOString().slice(0, 10) }; })();
+  const selfOpts = [prevPer ? { key: "self:prev", name: `Myself, the period before (${prevPer.from} to ${prevPer.to})`, p: me, per: prevPer } : null, perNow.kind !== "all" ? { key: "self:all", name: "Myself, all my games", p: me, per: { kind: "all" } } : null].filter(Boolean);
+  const others = selfOpts.concat(Object.values(S.players).filter((x) => x.id !== me.id).map((x) => ({ key: "p:" + x.id, name: x.name, p: x })))
     .concat(cmpExtern ? Object.values(cmpExtern.players).map((x) => ({ key: "f:" + x.id, name: `${x.name} (from ${cmpExtern.file})`, p: x })) : []);
   const pick = others.find((o) => o.key === me.settings.cmpWith) || others[0] || null;
   const tcSel = me.settings.cmpTc || "";
@@ -1293,12 +1320,13 @@ function compare(v) {
       <label class="f">Time controls<select id="cmpTc"><option value="">All</option>${TC_CATS.map((c) => `<option value="${c}" ${c === tcSel ? "selected" : ""}>${TC_LABEL[c]}</option>`).join("")}</select></label>
       <label class="btn secondary" style="cursor:pointer">Load a player from a backup file<input type="file" id="cmpFile" accept=".json" class="visually-hidden"></label></div>
     ${periodBarHtml(me)}
-    <p class="small muted">To compare with a friend, a coach or a stronger player: add them as a player (player menu at the top → "+ New player"), fill in their Lichess or Chess.com name and load their games. Or load a backup file they sent you (Home → Log &amp; backup); it is only read here, not saved.</p>`;
+    <p class="small muted">Choose "Myself, the period before" to see whether you improved: it compares the period above with the same length of time just before it. To compare with a friend, a coach or a stronger player: add them as a player (player menu at the top → "+ New player"), fill in their Lichess or Chess.com name and load their games. Or load a backup file they sent you (Home → Log &amp; backup); it is only read here, not saved.</p>`;
   if (!pick) { v.innerHTML = `<div class="card"><h2>Who to compare</h2>${pickHtml}</div>`; bindCompare(v, me); return; }
   const other = pick.p;
   const cmpPer = periodOf(me);
   const sel = (p) => Object.values(p.games || {}).filter((g) => (!tcSel || g.tc === tcSel) && inPeriod(g, cmpPer));
-  const ga = sel(me), gb = sel(other);
+  const ga = sel(me), gb = pick.per ? Object.values(me.games || {}).filter((g) => (!tcSel || g.tc === tcSel) && inPeriod(g, pick.per)) : sel(other);
+  const colA = pick.per ? `${me.name}: ${periodLabel(perNow).toLowerCase()}` : me.name, colB = pick.per ? (pick.key === "self:prev" ? "the period before" : "all games") : other.name;
   const A = ga.length ? aggregate(ga) : null, B = gb.length ? aggregate(gb) : null;
   const TA = testSummary(me, A), TB = testSummary(other, B);
   // one row: label, value for each side, which direction is better ("hi" / "lo" / null), optional ranges for overlap
@@ -1313,7 +1341,8 @@ function compare(v) {
   add("Games", g(A, (X) => X.games), g(B, (X) => X.games));
   add("Score", g(A, (X) => X.scorePct), g(B, (X) => X.scorePct), "hi", (x) => x + "%");
   add("Won / drawn / lost", g(A, (X) => `${X.wins} / ${X.draws} / ${X.losses}`), g(B, (X) => `${X.wins} / ${X.draws} / ${X.losses}`));
-  add("Rating (from games)", g(A, () => playerElo(me)), g(B, () => playerElo(other)), "hi");
+  const avgElo = (gs) => { const x = gs.map((q) => +q.playerElo).filter((y) => y > 0); return x.length ? Math.round(x.reduce((a, b) => a + b, 0) / x.length) : null; };
+  if (pick.per) add("Rating in these games (average)", avgElo(ga), avgElo(gb), "hi"); else add("Rating (from games)", g(A, () => playerElo(me)), g(B, () => playerElo(other)), "hi");
   sec("Quality of moves");
   add("Accuracy", g(A, accAll), g(B, accAll), "hi");
   add("Average centipawn loss", g(A, (X) => X.cpl.all.me.acpl), g(B, (X) => X.cpl.all.me.acpl), "lo", (x) => x, g(A, (X) => [X.cpl.all.me.lo, X.cpl.all.me.hi]), g(B, (X) => [X.cpl.all.me.lo, X.cpl.all.me.hi]));
@@ -1333,7 +1362,7 @@ function compare(v) {
   sec("Openings (most played family)");
   for (const c of ["w", "b"]) { const top = (X) => { const f = X.families.find((f) => f.color === c); return f ? `${f.name} · ${f.games}× · ${f.scorePct}%` : null; };
     add(c === "w" ? "As White" : "As Black", g(A, top), g(B, top)); }
-  if (TA || TB) {
+  if (!pick.per && (TA || TB)) {
     sec("Thinking test");
     add("Test rating", TA?.overall ?? null, TB?.overall ?? null, "hi");
     add("Tactical / positional", TA ? `${TA.tactical ?? "–"} / ${TA.positional ?? "–"}` : null, TB ? `${TB.tactical ?? "–"} / ${TB.positional ?? "–"}` : null);
@@ -1348,7 +1377,7 @@ function compare(v) {
     const R = side === "a" ? r.ra : r.rb;
     return `<td class="${win ? (overlap(r) ? "cmp-tie" : "cmp-win") : ""}">${esc(String(r.fmt(x)))}${R && R.every((z) => z != null && isFinite(z)) ? ` <span class="rng">${r.fmt(R[0])} to ${r.fmt(R[1])}</span>` : ""}</td>`; };
   v.innerHTML = `<div class="card"><h2>Who to compare</h2>${pickHtml}</div>
-    <div class="card"><div class="scroll"><table class="cmptable"><tr><th></th><th>${esc(me.name)}</th><th>${esc(other.name)}</th></tr>
+    <div class="card"><div class="scroll"><table class="cmptable"><tr><th></th><th>${esc(colA)}</th><th>${esc(colB)}</th></tr>
       ${rows.map((r) => (r.sec ? `<tr class="sec"><td colspan="3">${esc(r.sec)}</td></tr>` : `<tr><td>${esc(r.label)}</td>${cell(r, "a")}${cell(r, "b")}</tr>`)).join("")}</table></div>
       <p class="small muted"><span class="cmp-win">Green</span> = clearly better. <span class="cmp-tie">Light green</span> = better, but the 95% ranges overlap (or one player has fewer than 10 games), so it may be chance. Phases and centipawn loss need games analysed with this version${!A || !B ? "; a player without analysed games shows dashes" : ""}. Ratings from different sites (Lichess vs Chess.com) aren't directly comparable.</p></div>`;
   bindCompare(v, me);

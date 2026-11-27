@@ -392,6 +392,7 @@ async function runItem(v0, cur, C, opts) {
     const sfen = c.fen(); brd.setFen(sfen, { last }); brd.setOrientation(stm);
     const first = pre === 0;
     v.querySelector("#stage").innerHTML = `${first ? "" : `<div class="feedback info small">Correct so far. Your opponent replied <b>${C.esc(solSan[pre - 1])}</b> (see the board). <b>Continue the line from here.</b> <span class="muted">What you found yourself so far counts fully; the moves you add now count as found "with help" (you've seen the reply).</span></div>`}
+    if (!first) setTimeout(() => v.querySelector("#tb")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 50);
       ${first ? `<label class="f" style="margin-top:6px"><b style="color:var(--ink)">Your idea: what's going on and why?</b><textarea id="why" style="min-height:60px" placeholder="E.g. 'The black king has no escape squares, so after Rxf7 there's a back-rank mate'"></textarea></label>` : ""}
       <label class="f" style="margin-top:6px"><b style="color:var(--ink)">${first ? "Your move, or your whole line" : "Continue the line"}</b>
       <input id="line" placeholder="e.g. Nd2, or a line: Rxf7 Kxf7 Qh5+ Kg8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
@@ -625,7 +626,7 @@ export function profileView(v, C) {
   const rep = A ? repertoireFromGames(A) : null;
   const weakCats = R ? Object.entries(R.cats).sort((a, b) => a[1].rating - b[1].rating).slice(0, 3).map(([c]) => c) : [];
   v.innerHTML = `<div class="card"><h2>${C.esc(p.name)}: player profile</h2>
-    <div class="stats"><div class="stat"><div class="v">${R ? R.elo : playerElo(p)}</div><div class="l">rating (games)</div></div>${R ? `<div class="stat"><div class="v">${R.overall}</div><div class="l">test rating</div></div>` : ""}
+    <div class="stats"><div class="stat"><div class="v">${R ? R.elo : playerElo(p)}</div><div class="l">rating used for training${ratingInfo(p).games && ratingInfo(p).games !== playerElo(p) ? ` (your games: ${ratingInfo(p).games})` : ""}</div></div>${R ? `<div class="stat"><div class="v">${R.overall}</div><div class="l">test rating</div></div>` : ""}
     <div class="stat"><div class="v">${C.esc(T.name)}</div><div class="l">dominant player type${R ? "" : " (from games only, take the test!)"}</div></div>
     ${aggr !== null ? `<div class="stat"><div class="v">${aggr}</div><div class="l">aggressive (100) ↔ defensive (0)</div></div>` : ""}</div></div>
     ${R ? `<div class="card"><h2>Player type (Lars Bo Hansen model)</h2><p class="small muted">Everyone has something of all four types; one usually dominates. Based on your test categories, the questionnaire${S ? " and your games" : ""}.</p>
@@ -644,7 +645,7 @@ export function profileView(v, C) {
       <p class="small">${styleComment(S)}</p></div>` : (A ? `<div class="card"><p class="small">Analyse new games (or re-analyse them) for style statistics.</p></div>` : "")}
     <div class="card"><h2>Openings</h2>
       ${rep ? `<h3>What you play now</h3><table class="small">${rep.map((r) => `<tr><td>${C.esc(r.label)}</td><td>${C.esc(r.name)}</td><td>${r.games} games, ${r.scorePct}%</td></tr>`).join("")}</table>` : ""}
-      ${A && A.hardest.length ? `<h3>Hardest for you (lowest score)</h3><table class="small">${A.hardest.map((o) => `<tr><td>${o.color === "w" ? "as White" : "as Black"}</td><td>${C.esc(o.name)}</td><td>${o.games} games, ${o.scorePct}%${o.wpAfter10 != null ? `, win chance after move 10 ${o.wpAfter10}%` : ""}</td></tr>`).join("")}</table>
+      ${A && A.hardest.length ? `<h3>Hardest for you (lowest score)</h3><table class="small">${A.hardest.map((o) => `<tr><td>${o.color === "w" ? "as White" : "as Black"}</td><td>${C.esc(openingSide(o.name, o.color))}</td><td>${o.games} games, ${o.scorePct}%${o.wpAfter10 != null ? `, win chance after move 10 ${o.wpAfter10}%` : ""}</td></tr>`).join("")}</table>
         <p class="small muted">Win chance after move 10 is low? Then study the opening itself. Is it fine? Then the problem is the middlegame plan: study model games in that structure.</p>` : ""}
       <h3>What fits a ${C.esc(T.name.toLowerCase())}</h3>
       <div class="small"><b>White:</b><ul>${O.white.map(([l, w]) => `<li><b>${C.esc(l)}</b>: ${C.esc(w)}</li>`).join("")}</ul><b>Black:</b><ul>${O.black.map(([l, w]) => `<li><b>${C.esc(l)}</b>: ${C.esc(w)}</li>`).join("")}</ul>
@@ -679,12 +680,17 @@ function guessTypeFromGames(A) {
   if ((s.acc.equal ?? 0) >= 90 && s.aggression < 40) return "reflector";
   return "pragmatist";
 }
+// who chose the opening: "Modern Defense" played with White means you played against it
+export function openingSide(name, color) {
+  const def = /Defen[cs]e|Counter-?gambit/i.test(name), wsys = /System|Attack|Opening|London|Colle|Trompowsky|Bird|English|R[ée]ti/i.test(name) && !def;
+  return (color === "w" && def) || (color === "b" && wsys) ? `against the ${name}` : name;
+}
 function repertoireFromGames(A) {
   const pick = (c, re) => A.openings.filter((o) => o.color === c && (!re || re.test(o.name))).sort((a, b) => b.games - a.games)[0];
   const out = [];
-  const w = pick("w"); if (w) out.push({ label: "Most played as White", name: w.name, games: w.games, scorePct: w.scorePct });
-  const be4 = pick("b", /Sicilian|French|Caro|Scandinavian|Pirc|Modern|Alekhine|Italian|Ruy|Spanish|Scotch|Petrov|Petroff|King'?s Pawn|Vienna|Philidor|Four Knights|Owen|Nimzowitsch|^e4/i); if (be4) out.push({ label: "As Black vs 1.e4", name: be4.name, games: be4.games, scorePct: be4.scorePct });
-  const bd4 = pick("b", /Queen'?s|Indian|Slav|Gr[uü]nfeld|Dutch|Benoni|Budapest|Catalan|London|Nimzo|Bogo|Trompowsky|Colle|English|Reti|R[ée]ti|^d4|^c4|^Nf3/i); if (bd4) out.push({ label: "As Black vs 1.d4", name: bd4.name, games: bd4.games, scorePct: bd4.scorePct });
+  const w = pick("w"); if (w) out.push({ label: "Most played as White", name: openingSide(w.name, "w"), games: w.games, scorePct: w.scorePct });
+  const be4 = pick("b", /Sicilian|French|Caro|Scandinavian|Pirc|Modern|Alekhine|Italian|Ruy|Spanish|Scotch|Petrov|Petroff|King'?s Pawn|Vienna|Philidor|Four Knights|Owen|Nimzowitsch|^e4/i); if (be4) out.push({ label: "As Black vs 1.e4", name: openingSide(be4.name, "b"), games: be4.games, scorePct: be4.scorePct });
+  const bd4 = pick("b", /Queen'?s|Indian|Slav|Gr[uü]nfeld|Dutch|Benoni|Budapest|Catalan|London|Nimzo|Bogo|Trompowsky|Colle|English|Reti|R[ée]ti|^d4|^c4|^Nf3/i); if (bd4) out.push({ label: "As Black vs 1.d4 and others", name: openingSide(bd4.name, "b"), games: bd4.games, scorePct: bd4.scorePct });
   return out.length ? out : null;
 }
 
@@ -695,7 +701,7 @@ export function currentStyle(p, C) {
   const gs = Object.values(p.games || {});
   const A = gs.length ? C.aggregate(gs) : null;
   if (!t && !A) return null;
-  if (!t && gs.length < 30) return null; // too early to tell from games alone (and no test)
+  if (!t && gs.length < 50) return null; // a type from games alone needs many games; the test is the better source
   const R = t ? computeResult(p, t, A) : null;
   const type = R ? R.type : guessTypeFromGames(A);
   return { type, typeName: PLAYER_TYPES[type].name, aggression: R ? R.aggression : A?.style?.aggression ?? null, fromTest: !!R, A };

@@ -121,7 +121,7 @@ export function makePlan(weaknesses, hours) {
 export function nextStepsFrom(diag) {
   const steps = [];
   for (const w of diag.weaknesses.slice(0, 3)) steps.push(w.drills ? `${w.title}: ${w.drills[0]}` : `${w.title}: work on it for 2 weeks`);
-  steps.push("Solve the due puzzles from your own games (Puzzles tab)");
+  steps.push("Puzzles from your own games, whenever some are due (Home shows how many)");
   return steps;
 }
 
